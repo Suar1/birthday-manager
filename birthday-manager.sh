@@ -33,7 +33,7 @@ if [ ! -f package.json ]; then
     echo "Creating package.json..."
     npm init -y
 fi
-npm install express nodemailer node-schedule sqlite3 || { echo "Dependency installation failed."; exit 1; }
+npm install express nodemailer node-schedule sqlite3 multer || { echo "Dependency installation failed."; exit 1; }
 
 # Ask the user whether to use default or custom backend and frontend
 echo "##############################"
