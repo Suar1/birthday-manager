@@ -14,19 +14,17 @@ apt-get upgrade -y
 apt-get install -y nodejs npm sqlite3
 
 # Install PM2
+echo "Installing PM2..."
 npm install -g pm2
 
 # Clone the repository
 echo "Cloning the repository..."
 git clone https://github.com/Suar1/birthday-manager.git
-cd birthday-manager
+cd birthday-manager || { echo "Failed to navigate to the birthday-manager directory."; exit 1; }
 
 # Install project dependencies
 echo "Installing project dependencies..."
 npm install
-
-# Create necessary directories
-mkdir -p public data
 
 # Ask the user whether to use default or custom backend and frontend
 echo "##############################"
@@ -34,12 +32,11 @@ echo "Do you want to use the pre-configured backend and frontend? (y/n)"
 echo "##############################"
 read -r use_default
 
-if [ "$use_default" == "y" ] || [ "$use_default" == "Y" ]; then
+if [[ "$use_default" =~ ^[yY]$ ]]; then
     echo "Using pre-configured backend and frontend..."
-    mv index.js index.js.default
-    mv index.html public/index.html.default
-    cp index.js index.js
-    cp index.html public/index.html
+    # Ensure correct placement of pre-configured files
+    cp index.js index.js.default
+    cp index.html public/index.html.default
 else
     echo "##############################"
     echo "Please paste your custom backend code (index.js). Press Ctrl+D to finish:"
