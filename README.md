@@ -1,76 +1,81 @@
-Birthday Reminder Application
-A Node.js-based Birthday Reminder application that sends multilingual email reminders for upcoming birthdays. This project features a backend API with SQLite database integration and a user-friendly frontend for managing birthdays and SMTP settings.
+Here’s an updated README.md with instructions on how to get the script from your repository and run it:
+# Birthday Manager
+
+A simple web application to manage birthdays, send reminders, and configure SMTP settings. This project allows you to easily track birthdays and send multilingual email reminders.
+
+---
+
+## Features
+
+- **Frontend and Backend**: A web-based interface with backend support.
+- **Database**: Uses SQLite3 to store birthdays and SMTP settings.
+- **Email Notifications**: Sends birthday reminders in multiple languages.
+- **Automated Setup**: One-click setup script to configure everything, including dependencies.
+- **PM2 Integration**: Automatically starts the server on reboot.
+
+---
+
+## How to Use
+
+### 1. Clone the Repository
+
+To get the project files, clone the repository to your server:
+
+```bash
+git clone https://github.com/Suar1/birthday-manager.git
+cd birthday-manager
 ________________________________________
-Features
-•	Manage Birthdays: Add, modify, and delete birthdays with optional photo uploads.
-•	Email Reminders: Sends multilingual email reminders for today's birthdays with embedded photos.
-•	SMTP Configuration: Configure email server settings directly via the frontend.
-•	Automated Setup: All dependencies and configurations are handled by a single setup script.
-•	Persistent Data: Stores data in an SQLite database.
-•	Scheduled Jobs: Automatically sends reminders every day at a specified time using node-schedule.
+2. Run the Setup Script
+The setup script installs all dependencies and prompts you to provide the backend and frontend code.
+Run the setup script:
+chmod +x birthday-manager.sh
+./birthday-manager.sh
 ________________________________________
-Automated Setup
-Follow these simple steps to set up the Birthday Reminder application:
-1.	Clone the Repository
-2.	git clone https://github.com/your-username/birthday-reminder.git
-3.	cd birthday-reminder
-4.	Run the Setup Script Execute the provided script to automatically install all dependencies, initialize the database, and configure the application:
-5.	bash setup.sh
-6.	Access the Application
-o	Open your browser and navigate to http://localhost:3000.
+3. Provide Backend and Frontend Code
+When prompted:
+1.	Paste your backend code (index.js) when you see the following message:
+2.	##############################
+3.	Please paste your backend code (index.js). Press Ctrl+D to finish:
+4.	##############################
+After pasting, press Ctrl+D to save it.
+5.	Paste your frontend code (index.html) when you see the following message:
+6.	##############################
+7.	Please paste your frontend code (index.html). Press Ctrl+D to finish:
+8.	##############################
+After pasting, press Ctrl+D to save it.
 ________________________________________
-File Structure
-birthday-reminder/
-├── data/                    # SQLite database and JSON configuration files
-│   ├── birthdays.db         # SQLite database file
-│   ├── smtp.json            # SMTP settings file (if used)
-├── public/                  # Frontend files
-│   ├── index.html           # Main frontend file
-├── index.js                 # Main backend file (Node.js server)
-├── setup.sh                 # Automated setup script
-├── package.json             # Project metadata and dependencies
-└── README.md                # Project documentation
+4. Access the Application
+Once the setup script finishes, your application will start automatically.
+Access the app in your browser:
+http://<your-server-ip>:3000
+Replace <your-server-ip> with:
+•	localhost or 127.0.0.1 if running locally.
+•	Your server’s IP address if running on a remote machine.
 ________________________________________
-Backend API Endpoints
-1.	Fetch All Birthdays
-o	GET /api/birthdays
-o	Returns a list of all birthdays in the database.
-2.	Add a Birthday
-o	POST /api/birthdays
-o	Accepts name, birthday, gender, and optional photo.
-3.	Modify a Birthday
-o	PUT /api/birthdays/:id
-o	Updates a birthday by ID.
-4.	Delete a Birthday
-o	DELETE /api/birthdays/:id
-o	Deletes a birthday by ID.
-5.	SMTP Settings
-o	GET /api/smtp-settings: Fetches current SMTP settings.
-o	POST /api/smtp-settings: Updates SMTP settings.
-6.	Send Test Email
-o	POST /api/test-email
-o	Sends a test email using the current SMTP settings.
-7.	Send Test Reminder
-o	GET /api/test-reminder
-o	Sends reminder emails for today's birthdays.
+5. Manage the Application
+The project uses PM2 for process management. You can use the following commands:
+•	Check the status of the server:
+•	pm2 list
+•	Restart the server:
+•	pm2 restart birthday-manager
+•	Stop the server:
+•	pm2 stop birthday-manager
+•	View logs:
+•	pm2 logs birthday-manager
 ________________________________________
-Frontend Features
-•	Add new birthdays with name, date, gender, and optional photo.
-•	Modify existing birthdays and update their details.
-•	View all birthdays sorted by age.
-•	View today's birthdays in a separate section.
-•	Configure SMTP settings for sending emails.
-•	Test SMTP settings and reminder emails.
+Contributing
+Feel free to fork the repository and submit pull requests for improvements or bug fixes.
 ________________________________________
-How It Works
-•	Email Reminders: The application sends daily reminders at the specified time using node-schedule. Emails are sent in multiple languages, and photos are embedded directly in the email.
-•	Data Storage: All birthday and SMTP data is stored in an SQLite database, ensuring data persistence across server restarts.
-•	User-Friendly Frontend: A clean and simple interface allows users to manage birthdays and SMTP settings.
+License
+This project is licensed under the MIT License.
+
+This `README.md` includes:
+1. Instructions to clone the repository.
+2. Steps to run the setup script.
+3. Details on how to provide the backend and frontend code.
+4. Management commands for PM2. 
+
+This should be ready for you to use or update as needed!
 ________________________________________
-Technologies Used
-•	Node.js: Backend server
-•	Express.js: API framework
-•	SQLite: Database for persistent storage
-•	Multer: File upload handling
-•	Node-Schedule: Task scheduling for daily reminders
-•	Bootstrap: Frontend design
+License
+This project is licensed under the MIT License. See the LICENSE file for details.
