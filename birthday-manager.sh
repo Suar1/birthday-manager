@@ -27,6 +27,10 @@ cp -r ./* ../
 cd ..
 rm -rf birthday-manager
 
+# Ensure the public directory exists and move index.html there
+mkdir -p public
+mv index.html public/
+
 # Install project dependencies
 echo "Initializing project and installing dependencies..."
 if [ ! -f package.json ]; then
@@ -52,7 +56,6 @@ else
     echo "##############################"
     echo "Please paste your custom frontend code (index.html). Press Ctrl+D to finish:"
     echo "##############################"
-    mkdir -p public
     cat > public/index.html
 fi
 
