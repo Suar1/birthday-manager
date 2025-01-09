@@ -20,7 +20,12 @@ npm install -g pm2
 # Clone the repository
 echo "Cloning the repository..."
 git clone https://github.com/Suar1/birthday-manager.git
+
+# Move files to the current directory
 cd birthday-manager || { echo "Failed to navigate to the birthday-manager directory."; exit 1; }
+cp -r ./* ../
+cd ..
+rm -rf birthday-manager
 
 # Install project dependencies
 echo "Installing project dependencies..."
@@ -78,5 +83,5 @@ echo "Setting timezone to Europe/Berlin..."
 timedatectl set-timezone Europe/Berlin
 
 echo "Setup completed successfully!"
-echo "Navigate to ~/birthday-manager to manage your server."
+echo "Navigate to the current directory to manage your server."
 echo "Use 'pm2 list' to check server status."
