@@ -9,9 +9,9 @@ echo "##############################"
 
 # Install dependencies
 echo "Updating and installing dependencies..."
-apt-get update -y
-apt-get upgrade -y
-apt-get install -y nodejs npm sqlite3
+sudo apt-get update -y
+sudo apt-get upgrade -y
+sudo apt-get install -y python3-pip nodejs npm sqlite3
 
 # Install PM2
 echo "Installing PM2..."
@@ -34,9 +34,6 @@ read -r use_default
 
 if [[ "$use_default" =~ ^[yY]$ ]]; then
     echo "Using pre-configured backend and frontend..."
-    # Ensure correct placement of pre-configured files
-    cp index.js index.js.default
-    cp index.html public/index.html.default
 else
     echo "##############################"
     echo "Please paste your custom backend code (index.js). Press Ctrl+D to finish:"
@@ -46,6 +43,7 @@ else
     echo "##############################"
     echo "Please paste your custom frontend code (index.html). Press Ctrl+D to finish:"
     echo "##############################"
+    mkdir -p public
     cat > public/index.html
 fi
 
