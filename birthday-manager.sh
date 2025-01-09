@@ -1,28 +1,59 @@
 #!/bin/bash
 
-# Update and Upgrade System
-echo "Updating and upgrading the system..."
-sudo apt-get update && sudo apt-get upgrade -y
+# Clear the terminal
+clear
 
-# Install Node.js, npm, and SQLite
-echo "Installing Node.js, npm, and SQLite..."
-sudo apt install -y nodejs npm sqlite3
+echo "##############################"
+echo "Welcome to the Birthday Manager Setup Script"
+echo "##############################"
 
-# Create Project Directory
-echo "Setting up the project directory..."
-mkdir -p ~/birthday_reminder/{data,public}
-cd ~/birthday_reminder
+# Install dependencies
+echo "Updating and installing dependencies..."
+apt-get update -y
+apt-get upgrade -y
+apt-get install -y nodejs npm sqlite3
 
-# Initialize Node.js Project
-echo "Initializing Node.js project..."
-npm init -y
+# Install PM2
+npm install -g pm2
 
-# Install Required Packages
-echo "Installing required packages..."
-npm install express nodemailer node-schedule sqlite3 multer
+# Clone the repository
+echo "Cloning the repository..."
+git clone https://github.com/Suar1/birthday-manager.git
+cd birthday-manager
 
-# Create SQLite Database and Tables
-echo "Creating SQLite database and tables..."
+# Install project dependencies
+echo "Installing project dependencies..."
+npm install
+
+# Create necessary directories
+mkdir -p public data
+
+# Ask the user whether to use default or custom backend and frontend
+echo "##############################"
+echo "Do you want to use the pre-configured backend and frontend? (y/n)"
+echo "##############################"
+read -r use_default
+
+if [ "$use_default" == "y" ] || [ "$use_default" == "Y" ]; then
+    echo "Using pre-configured backend and frontend..."
+    mv index.js index.js.default
+    mv index.html public/index.html.default
+    cp index.js index.js
+    cp index.html public/index.html
+else
+    echo "##############################"
+    echo "Please paste your custom backend code (index.js). Press Ctrl+D to finish:"
+    echo "##############################"
+    cat > index.js
+
+    echo "##############################"
+    echo "Please paste your custom frontend code (index.html). Press Ctrl+D to finish:"
+    echo "##############################"
+    cat > public/index.html
+fi
+
+# Initialize SQLite database
+echo "Setting up SQLite database..."
 sqlite3 data/birthdays.db <<EOF
 CREATE TABLE IF NOT EXISTS birthdays (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +62,6 @@ CREATE TABLE IF NOT EXISTS birthdays (
     photo TEXT,
     gender TEXT
 );
-
 CREATE TABLE IF NOT EXISTS smtp_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     smtpServer TEXT NOT NULL,
@@ -41,43 +71,17 @@ CREATE TABLE IF NOT EXISTS smtp_settings (
     recipientEmail TEXT NOT NULL
 );
 EOF
-#!/bin/bash
 
-# Ask for Backend Code
-echo "#################################################"
-echo "### Please paste your backend code (index.js) ###"
-echo "### Press Ctrl+D to finish                    ###"
-echo "#################################################"
-cat > index.js
-
-# Ask for Frontend Code
-echo "###############################################"
-echo "### Please paste your frontend code (index.html) ###"
-echo "### Press Ctrl+D to finish                       ###"
-echo "###############################################"
-cat > public/index.html
-
-
-# Test the Server
-echo "Testing the server..."
-node index.js & sleep 5
-kill $!
-
-# Install PM2
-echo "Installing PM2..."
-npm install -g pm2
-
-# Start the Server with PM2
+# Start the server using PM2
 echo "Starting the server with PM2..."
 pm2 start index.js --name birthday-manager
 pm2 save
 pm2 startup
 
-# Set Timezone (Optional)
+# Set the timezone
 echo "Setting timezone to Europe/Berlin..."
-sudo timedatectl set-timezone Europe/Berlin
+timedatectl set-timezone Europe/Berlin
 
-# Final Output
 echo "Setup completed successfully!"
-echo "Navigate to ~/birthday_reminder to manage your server."
+echo "Navigate to ~/birthday-manager to manage your server."
 echo "Use 'pm2 list' to check server status."
