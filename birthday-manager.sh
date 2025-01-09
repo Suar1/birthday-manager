@@ -28,8 +28,12 @@ cd ..
 rm -rf birthday-manager
 
 # Install project dependencies
-echo "Installing project dependencies..."
-npm install
+echo "Initializing project and installing dependencies..."
+if [ ! -f package.json ]; then
+    echo "Creating package.json..."
+    npm init -y
+fi
+npm install express nodemailer node-schedule sqlite3 || { echo "Dependency installation failed."; exit 1; }
 
 # Ask the user whether to use default or custom backend and frontend
 echo "##############################"
@@ -54,6 +58,7 @@ fi
 
 # Initialize SQLite database
 echo "Setting up SQLite database..."
+mkdir -p data
 sqlite3 data/birthdays.db <<EOF
 CREATE TABLE IF NOT EXISTS birthdays (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
