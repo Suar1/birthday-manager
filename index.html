@@ -282,6 +282,34 @@
 				console.error(error);
 			}
 		}
+		// Delete Birthday Function
+		async function deleteBirthday(id) {
+			try {
+				// Confirm with the user before deleting
+				const confirmation = confirm('Are you sure you want to delete this birthday?');
+				if (!confirmation) {
+					return; // If user cancels, exit the function
+				}
+
+				// Send the DELETE request to the server
+				const deleteResponse = await fetch(`/api/birthdays/${id}`, {
+					method: 'DELETE',
+				});
+
+				const deleteResult = await deleteResponse.json();
+
+				if (deleteResponse.ok) {
+					alert(deleteResult.message || 'Birthday deleted successfully!');
+					fetchBirthdays(); // Refresh the list of birthdays
+				} else {
+					alert(deleteResult.error || 'Failed to delete birthday.');
+				}
+			} catch (error) {
+				alert('An error occurred while deleting the birthday.');
+				console.error(error);
+			}
+		}
+
         // Test SMTP Settings
         document.getElementById('test-smtp-btn').addEventListener('click', async () => {
             try {
