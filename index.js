@@ -286,8 +286,8 @@ app.get('/api/test-reminder', async (req, res) => {
 
                     // Constructing Arabic text based on gender
                     const arabicText = isMale
-                        ? `هو يبلغ من العمر ${age} عامًا، واليوم هو عيد ميلاد ${birthday.name}.`
-                        : `هي تبلغ من العمر ${age} عامًا، واليوم هو عيد ميلاد ${birthday.name}.`;
+                        ? `عامًا ${age}  و هو يبلغ من العمر  ${birthday.name} اليوم هو عيد ميلاد`
+                        : `عامًا ${age}  و هي تبلغ من العمر  ${birthday.name} اليوم هو عيد ميلاد`;
 
                     const emailBody = `
                         <p><strong>Kurdish (Kurmanci):</strong> Îro rojbûna ${birthday.name} ye, dibe ${age} salî.</p>
@@ -371,14 +371,14 @@ schedule.scheduleJob('0 9 * * *', async () => {
                     // Multilingual Email Content with Gender Respect
                     const genderPronounEnglish = birthday.gender === 'male' ? 'he' : 'she';
                     const genderPronounGerman = birthday.gender === 'male' ? 'er' : 'sie';
-                    const genderPronounArabic = birthday.gender === 'male' ? 'هو' : 'هي';
+                    const genderPronounArabic = birthday.gender === 'male' ? 'هو يبلغ' : 'هي تبلغ';
                     const genderPronounKurdish = birthday.gender === 'male' ? 'wî' : 'wê';
 
                     const emailBody = `
                         <p><strong>Kurdish (Kurmanci):</strong> Îro rojbûna ${birthday.name} ye, dibe ${age} salî.</p>
                         <p><strong>English:</strong> Today is ${birthday.name}'s birthday, and ${genderPronounEnglish} is turning ${age} years old.</p>
                         <p><strong>German:</strong> Heute ist der Geburtstag von ${birthday.name}, und ${genderPronounGerman} wird ${age} Jahre alt.</p>
-                        <p><strong>Arabic:</strong> اليوم هو عيد ميلاد ${birthday.name}، ${genderPronounArabic} يبلغ/تبلغ من العمر ${age} عامًا.</p>
+                        <p><strong>Arabic:</strong> .عامًا ${age} من العمر ${genderPronounArabic} , ${birthday.name} اليوم هو عيد ميلاد.</p>
                         ${
                             birthday.photo
                                 ? `<p><img src="cid:photo_${birthday.id}" alt="Photo of ${birthday.name}" style="max-width: 150px; border-radius: 10px"></p>`
