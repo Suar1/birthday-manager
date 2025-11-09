@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Flask
+instance/
+.webassets-cache
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Config (optional - uncomment if you don't want to track config)
+# *.json
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Exports/Imports
+exports/
+imports/
+temp_import/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (legacy - can be removed if no longer needed)
+node_modules/
+package-lock.json
+
