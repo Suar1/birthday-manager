@@ -1,9 +1,0 @@
-{
-    "smtpServer": "smtp.gmail.com",
-    "smtpPort": "587",
-    "smtpEmail": "biraninarojbune@gmail.com",
-    "encryptedPassword": "ae88426fa01d7b6ec8821c944f601ebc78b42c7b38a78f257282f9523200da65",
-    "recipientEmail": "suar.mustafa@gmail.com",
-    "key": "6137b648da3e75947a716ddb7ab58133b29ff89bdcfc583cc65b735f7ab5529e",
-    "iv": "127c7752ec13b0af0dcf4516a85a6743"
-}
