@@ -9,24 +9,13 @@ env/
 ENV/
 .venv
 
-# Flask
-instance/
-.webassets-cache
-
-# Database
+# Database (will be created in container)
 *.db
 *.sqlite
 *.sqlite3
 
-# User data directory
-data/
-!data/.gitkeep
-
-# Config (optional - uncomment if you don't want to track config)
-# *.json
-
-# Uploads (user images)
-uploads/
+# Uploads (will be created in container)
+uploads/*
 !uploads/.gitkeep
 
 # Exports/Imports
@@ -45,7 +34,24 @@ temp_import/
 .DS_Store
 Thumbs.db
 
-# Node (legacy - can be removed if no longer needed)
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Tests
+tests/
+*.spec.js
+playwright.config.js
+
+# Node
 node_modules/
 package-lock.json
+
+# Logs
+*.log
 

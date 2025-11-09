@@ -25,6 +25,42 @@ let focusTrapElements = [];
 let lastFocusedElement = null;
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+// Safe translation function that always works
+function t(key, params = {}) {
+    if (typeof i18n !== 'undefined' && i18n && typeof i18n.t === 'function') {
+        return i18n.t(key, params);
+    }
+    // Fallback to English if i18n not loaded (should not happen in production)
+    const fallbacks = {
+        'noBirthdaysToday': 'No birthdays today',
+        'checkBackTomorrow': 'Check back tomorrow! 🎈',
+        'noUpcoming': 'No upcoming birthdays in the next 7 days',
+        'today': 'Today!',
+        'tomorrow': 'Tomorrow',
+        'days': 'days',
+        'daysAgo': 'days ago',
+        'turningAge': `Turning ${params.age || 0} years old today! 🎂`,
+        'noBirthdays': 'No birthdays found',
+        'showing': 'Showing',
+        'to': 'to',
+        'of': 'of',
+        'results': 'results',
+        'previous': 'Previous',
+        'next': 'Next',
+        'male': 'Male',
+        'female': 'Female',
+        'na': 'N/A',
+        'share': 'Share',
+        'edit': 'Edit',
+        'delete': 'Delete',
+        'buyMeACoffee': 'Buy me a coffee',
+    };
+    return fallbacks[key] || key;
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 document.addEventListener('DOMContentLoaded', () => {
@@ -38,6 +74,12 @@ document.addEventListener('DOMContentLoaded', () => {
     setupTableSorting();
     setupPagination();
     updateUIWithTranslations();
+    
+    // Set current year in footer
+    const currentYearEl = document.getElementById('current-year');
+    if (currentYearEl) {
+        currentYearEl.textContent = new Date().getFullYear();
+    }
 });
 
 // ============================================================================
@@ -73,7 +115,18 @@ function setupEventListeners() {
     
     // Language selector
     document.getElementById('lang-selector')?.addEventListener('change', (e) => {
-        i18n.setLang(e.target.value);
+        const selectedLang = e.target.value;
+        if (i18n && typeof i18n.setLang === 'function') {
+            i18n.setLang(selectedLang);
+            // Ensure selector value is set (should be automatic, but ensure it)
+            e.target.value = selectedLang;
+            // Force UI update after language change
+            setTimeout(() => {
+                if (typeof updateUIWithTranslations === 'function') {
+                    updateUIWithTranslations();
+                }
+            }, 100);
+        }
     });
     
     // Forms
@@ -370,7 +423,7 @@ async function fetchBirthdays() {
         updateStats();
     } catch (error) {
         console.error('Error fetching birthdays:', error);
-        showToast('Failed to load birthdays', 'error');
+        showToast(i18n?.t('failedToLoad') || 'Failed to load birthdays', 'error');
         hideLoadingState();
     }
 }
@@ -508,7 +561,7 @@ function updatePaginationControls() {
         onclick="goToPage(${currentPage - 1})" 
         class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
         ${currentPage === 1 ? 'aria-disabled="true"' : ''}>
-        ${i18n?.t('previous') || 'Previous'}
+        ${t('previous')}
     </button>`;
     
     // Page numbers
@@ -529,7 +582,7 @@ function updatePaginationControls() {
         onclick="goToPage(${currentPage + 1})" 
         class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
         ${currentPage === totalPages ? 'aria-disabled="true"' : ''}>
-        ${i18n?.t('next') || 'Next'}
+        ${t('next')}
     </button>`;
     
     controls.innerHTML = html;
@@ -544,11 +597,11 @@ function updatePaginationInfo() {
     const total = filteredBirthdays.length;
     
     if (total === 0) {
-        info.textContent = i18n?.t('noBirthdays') || 'No birthdays found';
+        info.textContent = t('noBirthdays');
         return;
     }
     
-    info.textContent = `${i18n?.t('showing') || 'Showing'} ${start} ${i18n?.t('to') || 'to'} ${end} ${i18n?.t('of') || 'of'} ${total} ${i18n?.t('results') || 'results'}`;
+    info.textContent = `${t('showing')} ${start} ${t('to')} ${end} ${t('of')} ${total} ${t('results')}`;
 }
 
 function goToPage(page) {
@@ -671,8 +724,8 @@ function renderTodayBirthdays() {
     if (todays.length === 0) {
         todayList.innerHTML = `
             <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-                <p class="text-lg mb-2">No birthdays today</p>
-                <p class="text-sm">Check back tomorrow! 🎈</p>
+                <p class="text-lg mb-2">${t('noBirthdaysToday')}</p>
+                <p class="text-sm">${t('checkBackTomorrow')}</p>
             </div>
         `;
         return;
@@ -680,6 +733,7 @@ function renderTodayBirthdays() {
     
     todayList.innerHTML = todays.map(birthday => {
         const age = birthday.age || calculateAge(birthday.birthday);
+        const turningText = t('turningAge', { age });
         return `
             <div class="flex items-center gap-4 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-xl border border-yellow-200 dark:border-yellow-800/50 hover:shadow-lg transition-all animate-fade-in">
                 ${birthday.photo ? `
@@ -692,7 +746,7 @@ function renderTodayBirthdays() {
                 `}
                 <div class="flex-1">
                     <h3 class="font-bold text-lg text-gray-800 dark:text-white">${birthday.name}</h3>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Turning ${age} years old today! 🎂</p>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">${turningText}</p>
                 </div>
                 <div class="text-3xl">🎉</div>
             </div>
@@ -718,16 +772,16 @@ function renderCountdownWidget() {
     if (upcoming.length === 0) {
         widget.innerHTML = `
             <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-                <p class="text-sm">No upcoming birthdays in the next 7 days</p>
+                <p class="text-sm">${t('noUpcoming')}</p>
             </div>
         `;
         return;
     }
     
     widget.innerHTML = upcoming.map(birthday => {
-        const daysText = birthday.daysUntil === 0 ? 'Today!' : 
-                        birthday.daysUntil === 1 ? 'Tomorrow' : 
-                        `${birthday.daysUntil} days`;
+        const daysText = birthday.daysUntil === 0 ? t('today') : 
+                        birthday.daysUntil === 1 ? t('tomorrow') : 
+                        `${birthday.daysUntil} ${t('days')}`;
         
         return `
             <div class="flex items-center gap-3 p-3 bg-white/50 dark:bg-gray-700/50 rounded-xl hover:bg-white/70 dark:hover:bg-gray-700/70 transition-all animate-fade-in">
@@ -745,7 +799,7 @@ function renderCountdownWidget() {
                 </div>
                 <div class="text-right">
                     <div class="text-lg font-bold text-purple-600 dark:text-purple-400">${birthday.daysUntil}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">days</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">${t('days')}</div>
                 </div>
             </div>
         `;
@@ -759,7 +813,7 @@ function renderAllBirthdays() {
         tableBody.innerHTML = `
             <tr>
                 <td colspan="6" class="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
-                    ${i18n?.t('noBirthdays') || 'No birthdays found'}
+                    ${t('noBirthdays')}
                 </td>
             </tr>
         `;
@@ -776,10 +830,10 @@ function renderAllBirthdays() {
             day: 'numeric' 
         });
         
-        const daysText = daysUntil === 0 ? 'Today!' : 
-                        daysUntil === 1 ? 'Tomorrow' : 
-                        daysUntil < 0 ? `${Math.abs(daysUntil)} days ago` :
-                        `${daysUntil} days`;
+        const daysText = daysUntil === 0 ? t('today') : 
+                        daysUntil === 1 ? t('tomorrow') : 
+                        daysUntil < 0 ? `${Math.abs(daysUntil)} ${t('daysAgo')}` :
+                        `${daysUntil} ${t('days')}`;
         
         const daysClass = daysUntil === 0 ? 'text-yellow-600 dark:text-yellow-400 font-bold' :
                          daysUntil <= 7 ? 'text-orange-600 dark:text-orange-400' :
@@ -799,7 +853,7 @@ function renderAllBirthdays() {
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap">
                     <div class="text-sm font-medium text-gray-900 dark:text-white">${birthday.name}</div>
-                    <div class="text-sm text-gray-500 dark:text-gray-400">${birthday.gender || 'N/A'}</div>
+                    <div class="text-sm text-gray-500 dark:text-gray-400">${birthday.gender ? (t(birthday.gender) || birthday.gender) : t('na')}</div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${formattedDate}</td>
                 <td class="px-6 py-4 whitespace-nowrap">
@@ -812,21 +866,21 @@ function renderAllBirthdays() {
                     <div class="flex items-center gap-2">
                         <button onclick="shareBirthday(${birthday.id})" 
                             class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 transition-colors" 
-                            title="Share">
+                            title="${t('share')}">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path>
                             </svg>
                         </button>
                         <button onclick="openEditModal(${birthday.id})" 
                             class="text-yellow-600 hover:text-yellow-900 dark:text-yellow-400 dark:hover:text-yellow-300 transition-colors" 
-                            title="Edit">
+                            title="${t('edit')}">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                             </svg>
                         </button>
                         <button onclick="deleteBirthday(${birthday.id})" 
                             class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors" 
-                            title="Delete">
+                            title="${t('delete')}">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
                             </svg>
@@ -880,15 +934,295 @@ function initI18n() {
 function updateUIWithTranslations() {
     if (typeof i18n === 'undefined') return;
     
-    // Update all translatable elements
-    const elements = {
-        'appName': document.querySelector('h1'),
-        'tagline': document.querySelector('nav p'),
-        'todaysBirthdays': document.querySelector('h2'),
-        // Add more as needed
+    const t = (key) => i18n.t(key);
+    
+    // Update navigation
+    const h1 = document.querySelector('nav h1');
+    if (h1) h1.textContent = t('appName');
+    
+    const tagline = document.querySelector('nav p');
+    if (tagline) tagline.textContent = t('tagline');
+    
+    // Update stats cards
+    const statsCards = document.querySelectorAll('.grid.grid-cols-1.md\\:grid-cols-3 h3');
+    if (statsCards.length >= 3) {
+        statsCards[0].textContent = t('today');
+        statsCards[1].textContent = t('thisWeek');
+        statsCards[2].textContent = t('total');
+    }
+    
+    const statsDescriptions = document.querySelectorAll('.grid.grid-cols-1.md\\:grid-cols-3 p.text-sm');
+    if (statsDescriptions.length >= 3) {
+        statsDescriptions[0].textContent = t('birthdaysToday');
+        statsDescriptions[1].textContent = t('upcomingBirthdays');
+        statsDescriptions[2].textContent = t('peopleTracked');
+    }
+    
+    // Update section headers - find by content and update
+    const sectionHeaders = [
+        { text: "Today's Birthdays", key: 'todaysBirthdays' },
+        { text: 'Add Birthday', key: 'addBirthday' },
+        { text: 'Upcoming (7 Days)', key: 'upcomingDays' },
+        { text: 'Data Management', key: 'dataManagement' },
+        { text: 'SMTP Settings', key: 'smtpSettings' },
+        { text: 'All Birthdays', key: 'allBirthdays' },
+        { text: 'Upcoming 30 Days', key: 'upcoming30Days' },
+        { text: 'Daily Digest', key: 'dailyDigest' },
+    ];
+    
+    document.querySelectorAll('h2').forEach(h2 => {
+        const text = h2.textContent.trim();
+        // Try exact match first, then partial match
+        const match = sectionHeaders.find(sh => {
+            const normalizedText = text.toLowerCase().trim();
+            const normalizedSh = sh.text.toLowerCase().trim();
+            return normalizedText === normalizedSh || 
+                   normalizedText.includes(normalizedSh) || 
+                   normalizedSh.includes(normalizedText);
+        });
+        if (match) {
+            // Preserve the span element if it exists
+            const span = h2.querySelector('span');
+            if (span) {
+                h2.innerHTML = '<span class="w-1 h-6 bg-gradient-to-b from-blue-500 to-indigo-600 rounded-full"></span> ' + t(match.key);
+            } else {
+                h2.textContent = t(match.key);
+            }
+        }
+    });
+    
+    // Update form labels
+    const nameLabel = document.querySelector('label[for="name"]');
+    if (nameLabel) nameLabel.innerHTML = t('name') + ' *';
+    
+    const birthdayLabel = document.querySelector('label[for="birthday"]');
+    if (birthdayLabel) birthdayLabel.innerHTML = t('birthday') + ' *';
+    
+    const genderLabel = document.querySelector('label[for="gender"]');
+    if (genderLabel) genderLabel.textContent = t('gender');
+    
+    const photoLabel = document.querySelector('label[for="photo"]');
+    if (photoLabel) photoLabel.textContent = t('photo');
+    
+    // Update placeholders
+    const nameInput = document.getElementById('name');
+    if (nameInput) nameInput.placeholder = t('enterFullName');
+    
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) searchInput.placeholder = t('searchPlaceholder');
+    
+    // Update select options
+    const genderSelect = document.getElementById('gender');
+    if (genderSelect) {
+        const options = genderSelect.querySelectorAll('option');
+        if (options[0]) options[0].textContent = t('selectGender');
+        if (options[1]) options[1].textContent = t('male');
+        if (options[2]) options[2].textContent = t('female');
+    }
+    
+    // Update buttons
+    const addBtn = document.querySelector('#add-birthday-form button[type="submit"]');
+    if (addBtn) addBtn.textContent = t('add');
+    
+    const exportZipBtn = document.getElementById('export-zip-btn');
+    if (exportZipBtn) {
+        const svg = exportZipBtn.querySelector('svg');
+        exportZipBtn.innerHTML = svg ? svg.outerHTML + ' ' + t('exportZIP') : t('exportZIP');
+    }
+    
+    const exportCsvBtn = document.getElementById('export-csv-btn');
+    if (exportCsvBtn) exportCsvBtn.textContent = t('exportCSV');
+    
+    const exportIcsBtn = document.getElementById('export-ics-btn');
+    if (exportIcsBtn) exportIcsBtn.textContent = t('exportICS');
+    
+    const importLabel = document.querySelector('label[for="import-file"]');
+    if (importLabel) {
+        const svg = importLabel.querySelector('svg');
+        importLabel.innerHTML = svg ? svg.outerHTML + ' ' + t('import') : t('import');
+    }
+    
+    const replaceLabel = document.querySelector('label:has(#replace-existing)');
+    if (replaceLabel) {
+        const span = replaceLabel.querySelector('span');
+        if (span) span.textContent = t('replaceExisting');
+    }
+    
+    const previewCsvBtn = document.getElementById('import-csv-preview-btn');
+    if (previewCsvBtn) previewCsvBtn.textContent = t('previewCSVImport');
+    
+    // Update SMTP form
+    const smtpLabels = {
+        'smtp-server': t('smtpServer') + ' *',
+        'smtp-port': t('smtpPort') + ' *',
+        'smtp-email': t('smtpEmail') + ' *',
+        'smtp-password': t('smtpPassword') + ' *',
+        'recipient-email': t('recipientEmail') + ' *',
     };
     
-    // This will be called when language changes
+    Object.entries(smtpLabels).forEach(([id, text]) => {
+        const label = document.querySelector(`label[for="${id}"]`);
+        if (label) label.textContent = text;
+    });
+    
+    const saveBtn = document.querySelector('#smtp-form button[type="submit"]');
+    if (saveBtn) saveBtn.textContent = t('save');
+    
+    const resetBtn = document.getElementById('reset-config-btn');
+    if (resetBtn) resetBtn.textContent = t('reset');
+    
+    const testSmtpBtn = document.getElementById('test-smtp-btn');
+    if (testSmtpBtn) testSmtpBtn.textContent = t('testSMTP');
+    
+    const testReminderBtn = document.getElementById('test-reminder-btn');
+    if (testReminderBtn) testReminderBtn.textContent = t('testReminder');
+    
+    // Update table headers
+    const tableHeaders = document.querySelectorAll('th.sortable, th[scope="col"]');
+    const headerMap = {
+        'Photo': t('photo'),
+        'Name': t('name'),
+        'Birthday': t('birthday'),
+        'Age': t('age'),
+        'Days Until': t('daysUntil'),
+        'Actions': t('actions'),
+    };
+    
+    tableHeaders.forEach(th => {
+        const text = th.textContent.trim().replace(/↑|↓/, '').trim();
+        if (headerMap[text]) {
+            const indicator = th.querySelector('.sort-indicator');
+            th.innerHTML = headerMap[text] + (indicator ? ' <span class="sort-indicator ml-1"></span>' : '');
+        }
+    });
+    
+    // Update pagination
+    const showLabel = document.querySelector('label[for="per-page"]');
+    if (showLabel) showLabel.textContent = t('show');
+    
+    // Update daily digest
+    const digestDaysLabel = document.querySelector('label[for="digest-days"]');
+    if (digestDaysLabel) digestDaysLabel.textContent = t('daysAhead');
+    
+    const previewDigestBtn = document.getElementById('preview-digest-btn');
+    if (previewDigestBtn) previewDigestBtn.textContent = t('preview');
+    
+    const sendDigestBtn = document.getElementById('send-digest-btn');
+    if (sendDigestBtn) sendDigestBtn.textContent = t('send');
+    
+    // Update modals
+    const editModalTitle = document.querySelector('#edit-modal h3');
+    if (editModalTitle) editModalTitle.textContent = t('editBirthday');
+    
+    const editNameLabel = document.querySelector('label[for="edit-name"]');
+    if (editNameLabel) editNameLabel.innerHTML = t('name') + ' *';
+    
+    const editBirthdayLabel = document.querySelector('label[for="edit-birthday"]');
+    if (editBirthdayLabel) editBirthdayLabel.innerHTML = t('birthday') + ' *';
+    
+    const editGenderLabel = document.querySelector('label[for="edit-gender"]');
+    if (editGenderLabel) editGenderLabel.textContent = t('gender');
+    
+    const editGenderSelect = document.getElementById('edit-gender');
+    if (editGenderSelect) {
+        const options = editGenderSelect.querySelectorAll('option');
+        if (options[0]) options[0].textContent = t('selectGender');
+        if (options[1]) options[1].textContent = t('male');
+        if (options[2]) options[2].textContent = t('female');
+    }
+    
+    const editPhotoLabel = document.querySelector('label[for="edit-photo"]');
+    if (editPhotoLabel) editPhotoLabel.textContent = t('photoOptional');
+    
+    const saveChangesBtn = document.querySelector('#edit-birthday-form button[type="submit"]');
+    if (saveChangesBtn) saveChangesBtn.textContent = t('saveChanges');
+    
+    const cancelEditBtn = document.getElementById('cancel-edit-btn');
+    if (cancelEditBtn) cancelEditBtn.textContent = t('cancel');
+    
+    // Update shortcuts modal
+    const shortcutsTitle = document.querySelector('#shortcuts-modal h3');
+    if (shortcutsTitle) shortcutsTitle.textContent = t('shortcuts');
+    
+    // Update shortcuts modal content - preserve existing structure but update text
+    const shortcutsContent = document.querySelector('#shortcuts-modal .space-y-3');
+    if (shortcutsContent) {
+        const shortcuts = [
+            { key: 'search', keyCode: '/' },
+            { key: 'newBirthday', keyCode: 'n' },
+            { key: 'goToToday', keyCode: 'g t' },
+            { key: 'goToAll', keyCode: 'g a' },
+            { key: 'goToAdd', keyCode: 'g a' },
+            { key: 'closeModal', keyCode: 'Esc' },
+        ];
+        
+        // Update by matching text content
+        const items = shortcutsContent.querySelectorAll('.flex.justify-between');
+        items.forEach((item) => {
+            const span = item.querySelector('span.text-gray-700, span.text-gray-300');
+            if (span) {
+                const currentText = span.textContent.trim();
+                // Match by common English phrases
+                if (currentText.includes('Search') || currentText === 'Search') {
+                    span.textContent = t('search');
+                } else if (currentText.includes('New Birthday') || currentText === 'New Birthday') {
+                    span.textContent = t('newBirthday');
+                } else if (currentText.includes('Go to Today') || currentText === 'Go to Today') {
+                    span.textContent = t('goToToday');
+                } else if (currentText.includes('Go to All') || currentText === 'Go to All') {
+                    span.textContent = t('goToAll');
+                } else if (currentText.includes('Close Modal') || currentText === 'Close Modal') {
+                    span.textContent = t('closeModal');
+                }
+            }
+        });
+    }
+    
+    // Update CSV preview modal
+    const csvPreviewTitle = document.querySelector('#csv-preview-modal h3');
+    if (csvPreviewTitle) csvPreviewTitle.textContent = t('csvImportPreview');
+    
+    const confirmCsvBtn = document.getElementById('confirm-csv-import');
+    if (confirmCsvBtn) confirmCsvBtn.textContent = t('import');
+    
+    const cancelCsvBtn = document.getElementById('cancel-csv-import');
+    if (cancelCsvBtn) cancelCsvBtn.textContent = t('cancel');
+    
+    // Update aria labels
+    const langSelector = document.getElementById('lang-selector');
+    if (langSelector) langSelector.setAttribute('aria-label', t('selectLanguage'));
+    
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) themeToggle.setAttribute('aria-label', t('toggleDarkMode'));
+    
+    const shortcutsBtn = document.getElementById('shortcuts-btn');
+    if (shortcutsBtn) {
+        shortcutsBtn.setAttribute('aria-label', t('keyboardShortcuts'));
+        shortcutsBtn.setAttribute('title', t('keyboardShortcuts') + ' (press ?)');
+    }
+    
+    // Update Buy Me a Coffee link text and aria-label
+    const buyMeCoffeeText = document.getElementById('buy-me-coffee-text');
+    if (buyMeCoffeeText) {
+        buyMeCoffeeText.textContent = t('buyMeACoffee');
+    }
+    
+    const buyMeCoffeeLink = document.getElementById('buy-me-coffee-link');
+    if (buyMeCoffeeLink) {
+        buyMeCoffeeLink.setAttribute('aria-label', t('buyMeACoffee'));
+    }
+    
+    // Update footer text
+    const footerServiceText = document.getElementById('footer-service-text');
+    if (footerServiceText) {
+        footerServiceText.textContent = ' — ' + t('aServiceBy') + ' ';
+    }
+    
+    // Update project name in footer
+    const footerProjectName = document.getElementById('footer-project-name');
+    if (footerProjectName) {
+        footerProjectName.textContent = t('appName');
+    }
 }
 
 // ============================================================================
@@ -940,7 +1274,7 @@ function checkDuplicate(name, excludeId = null) {
 function shareBirthday(id) {
     const birthday = allBirthdays.find(b => b.id === id);
     if (!birthday) {
-        showToast('Birthday not found', 'error');
+        showToast(i18n?.t('birthdayNotFound') || 'Birthday not found', 'error');
         return;
     }
     
@@ -955,7 +1289,7 @@ function shareBirthday(id) {
     
     if (navigator.clipboard) {
         navigator.clipboard.writeText(text).then(() => {
-            showToast('Copied to clipboard!', 'success');
+            showToast(i18n?.t('copiedToClipboard') || 'Copied to clipboard!', 'success');
         }).catch(() => {
             fallbackCopy(text);
         });
@@ -973,9 +1307,9 @@ function fallbackCopy(text) {
     textarea.select();
     try {
         document.execCommand('copy');
-        showToast('Copied to clipboard!', 'success');
+        showToast(i18n?.t('copiedToClipboard') || 'Copied to clipboard!', 'success');
     } catch (err) {
-        showToast('Failed to copy', 'error');
+        showToast(i18n?.t('failedToCopy') || 'Failed to copy', 'error');
     }
     document.body.removeChild(textarea);
 }
@@ -986,7 +1320,7 @@ function fallbackCopy(text) {
 async function openEditModal(id) {
     const birthday = allBirthdays.find(b => b.id === id);
     if (!birthday) {
-        showToast('Birthday not found', 'error');
+        showToast(i18n?.t('birthdayNotFound') || 'Birthday not found', 'error');
         return;
     }
     
@@ -1048,7 +1382,7 @@ async function handleAddBirthday(e) {
     
     // Validation
     if (!name || name.length < 2) {
-        showToast(i18n?.t('nameRequired') || 'Name is required (min 2 characters)', 'error');
+        showToast(i18n?.t('nameRequired') + ' ' + (i18n?.t('minCharacters') || '(min 2 characters)'), 'error');
         return;
     }
     
@@ -1080,16 +1414,16 @@ async function handleAddBirthday(e) {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || i18n?.t('add') + ' successfully!', 'success');
+            showToast(result.message || i18n?.t('addSuccess') || i18n?.t('add') + ' ' + (i18n?.t('successfully') || 'successfully!'), 'success');
             document.getElementById('add-birthday-form').reset();
             validateName(); // Reset validation
             fetchBirthdays();
         } else {
-            showToast(result.error || 'Failed to add birthday', 'error');
+            showToast(result.error || i18n?.t('failedToAdd') || 'Failed to add birthday', 'error');
         }
     } catch (error) {
         console.error('Error adding birthday:', error);
-        showToast('Failed to add birthday', 'error');
+        showToast(i18n?.t('failedToAdd') || 'Failed to add birthday', 'error');
     }
 }
 
@@ -1127,20 +1461,22 @@ async function handleUpdateBirthday(e) {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Birthday updated successfully!', 'success');
+            showToast(result.message || i18n?.t('updateSuccess') || 'Birthday updated successfully!', 'success');
             closeEditModal();
             fetchBirthdays();
         } else {
-            showToast(result.error || 'Failed to update birthday', 'error');
+            showToast(result.error || i18n?.t('failedToUpdate') || 'Failed to update birthday', 'error');
         }
     } catch (error) {
         console.error('Error updating birthday:', error);
-        showToast('Failed to update birthday', 'error');
+        showToast(i18n?.t('failedToUpdate') || 'Failed to update birthday', 'error');
     }
 }
 
 async function deleteBirthday(id) {
-    if (!confirm('Are you sure you want to delete this birthday?')) {
+    const confirmMsg = i18n?.t('deleteConfirm') || 
+        (i18n?.t('delete') ? `${i18n.t('delete')}?` : 'Are you sure you want to delete this birthday?');
+    if (!confirm(confirmMsg)) {
         return;
     }
     
@@ -1152,14 +1488,14 @@ async function deleteBirthday(id) {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Birthday deleted successfully!', 'success');
+            showToast(result.message || i18n?.t('deleteSuccess') || 'Birthday deleted successfully!', 'success');
             fetchBirthdays();
         } else {
-            showToast(result.error || 'Failed to delete birthday', 'error');
+            showToast(result.error || i18n?.t('failedToDelete') || 'Failed to delete birthday', 'error');
         }
     } catch (error) {
         console.error('Error deleting birthday:', error);
-        showToast('Failed to delete birthday', 'error');
+        showToast(i18n?.t('failedToDelete') || 'Failed to delete birthday', 'error');
     }
 }
 
@@ -1202,18 +1538,18 @@ async function handleSaveSMTP(e) {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'SMTP settings saved successfully!', 'success');
+            showToast(result.message || i18n?.t('smtpSaveSuccess') || 'SMTP settings saved successfully!', 'success');
         } else {
-            showToast(result.error || 'Failed to save SMTP settings', 'error');
+            showToast(result.error || i18n?.t('failedToSaveSMTP') || 'Failed to save SMTP settings', 'error');
         }
     } catch (error) {
         console.error('Error saving SMTP settings:', error);
-        showToast('Failed to save SMTP settings', 'error');
+        showToast(i18n?.t('failedToSaveSMTP') || 'Failed to save SMTP settings', 'error');
     }
 }
 
 async function handleResetConfig() {
-    if (!confirm('Are you sure you want to reset the configuration?')) {
+    if (!confirm(i18n?.t('resetConfirm') || 'Are you sure you want to reset the configuration?')) {
         return;
     }
     
@@ -1225,14 +1561,14 @@ async function handleResetConfig() {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Configuration reset successfully!', 'success');
+            showToast(result.message || i18n?.t('resetSuccess') || 'Configuration reset successfully!', 'success');
             document.getElementById('smtp-form').reset();
         } else {
-            showToast(result.error || 'Failed to reset configuration', 'error');
+            showToast(result.error || i18n?.t('failedToReset') || 'Failed to reset configuration', 'error');
         }
     } catch (error) {
         console.error('Error resetting config:', error);
-        showToast('Failed to reset configuration', 'error');
+        showToast(i18n?.t('failedToReset') || 'Failed to reset configuration', 'error');
     }
 }
 
@@ -1245,13 +1581,13 @@ async function handleTestSMTP() {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Test email sent successfully!', 'success');
+            showToast(result.message || i18n?.t('testEmailSuccess') || 'Test email sent successfully!', 'success');
         } else {
-            showToast(result.error || 'Failed to send test email', 'error');
+            showToast(result.error || i18n?.t('failedToSendTestEmail') || 'Failed to send test email', 'error');
         }
     } catch (error) {
         console.error('Error testing SMTP:', error);
-        showToast('Failed to send test email', 'error');
+        showToast(i18n?.t('failedToSendTestEmail') || 'Failed to send test email', 'error');
     }
 }
 
@@ -1264,13 +1600,13 @@ async function handleTestReminder() {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Test reminder sent successfully!', 'success');
+            showToast(result.message || i18n?.t('testReminderSuccess') || 'Test reminder sent successfully!', 'success');
         } else {
-            showToast(result.error || 'Failed to send test reminder', 'error');
+            showToast(result.error || i18n?.t('failedToSendTestReminder') || 'Failed to send test reminder', 'error');
         }
     } catch (error) {
         console.error('Error testing reminder:', error);
-        showToast('Failed to send test reminder', 'error');
+        showToast(i18n?.t('failedToSendTestReminder') || 'Failed to send test reminder', 'error');
     }
 }
 
@@ -1345,7 +1681,7 @@ async function handleExport(format = 'zip') {
         
         if (!response.ok) {
             const error = await response.json();
-            showToast(error.error || 'Failed to export birthdays', 'error');
+            showToast(error.error || i18n?.t('failedToExport') || 'Failed to export birthdays', 'error');
             return;
         }
         
@@ -1371,7 +1707,7 @@ async function handleExport(format = 'zip') {
         showToast(i18n?.t('exportSuccess') || 'Birthdays exported successfully!', 'success');
     } catch (error) {
         console.error('Error exporting birthdays:', error);
-        showToast('Failed to export birthdays', 'error');
+        showToast(i18n?.t('failedToExport') || 'Failed to export birthdays', 'error');
     }
 }
 
@@ -1385,7 +1721,7 @@ async function handleImport(e) {
     const isCsv = file.name.endsWith('.csv');
     
     if (!isZip && !isCsv) {
-        showToast('Please select a ZIP or CSV file', 'error');
+        showToast(i18n?.t('pleaseSelectFile') || 'Please select a ZIP or CSV file', 'error');
         e.target.value = '';
         return;
     }
@@ -1398,7 +1734,7 @@ async function handleImport(e) {
     }
     
     // ZIP import
-    if (!confirm('This will import birthdays from the ZIP file. Continue?')) {
+    if (!confirm(i18n?.t('importConfirm') || 'This will import birthdays from the ZIP file. Continue?')) {
         e.target.value = '';
         return;
     }
@@ -1423,11 +1759,11 @@ async function handleImport(e) {
             showToast(message, 'success');
             fetchBirthdays();
         } else {
-            showToast(result.error || 'Failed to import birthdays', 'error');
+            showToast(result.error || i18n?.t('failedToImport') || 'Failed to import birthdays', 'error');
         }
     } catch (error) {
         console.error('Error importing birthdays:', error);
-        showToast('Failed to import birthdays', 'error');
+        showToast(i18n?.t('failedToImport') || 'Failed to import birthdays', 'error');
     } finally {
         e.target.value = '';
     }
@@ -1463,11 +1799,11 @@ async function handleCSVPreviewWithFile(file) {
         if (response.ok) {
             displayCSVPreview(result, file);
         } else {
-            showToast(result.error || 'Failed to preview CSV', 'error');
+            showToast(result.error || i18n?.t('failedToPreviewCSV') || 'Failed to preview CSV', 'error');
         }
     } catch (error) {
         console.error('Error previewing CSV:', error);
-        showToast('Failed to preview CSV', 'error');
+        showToast(i18n?.t('failedToPreviewCSV') || 'Failed to preview CSV', 'error');
     }
 }
 
@@ -1480,25 +1816,25 @@ function displayCSVPreview(data, file) {
             <div class="grid grid-cols-4 gap-4">
                 <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                     <div class="text-2xl font-bold text-blue-600 dark:text-blue-400">${data.preview.total}</div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400">Total</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400">${i18n?.t('total') || 'Total'}</div>
                 </div>
                 <div class="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
                     <div class="text-2xl font-bold text-green-600 dark:text-green-400">${data.preview.new}</div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400">New</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400">${i18n?.t('new') || 'New'}</div>
                 </div>
                 <div class="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
                     <div class="text-2xl font-bold text-yellow-600 dark:text-yellow-400">${data.preview.duplicates}</div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400">Duplicates</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400">${i18n?.t('duplicates') || 'Duplicates'}</div>
                 </div>
                 <div class="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
                     <div class="text-2xl font-bold text-red-600 dark:text-red-400">${data.preview.invalid}</div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400">Invalid</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400">${i18n?.t('invalid') || 'Invalid'}</div>
                 </div>
             </div>
             
             ${data.new_entries.length > 0 ? `
                 <div>
-                    <h4 class="font-semibold mb-2">New Entries (sample):</h4>
+                    <h4 class="font-semibold mb-2">${i18n?.t('newEntriesSample') || 'New Entries (sample):'}</h4>
                     <div class="space-y-1 text-sm">
                         ${data.new_entries.map(e => `<div>${e.name} - ${e.birthday}</div>`).join('')}
                     </div>
@@ -1507,7 +1843,7 @@ function displayCSVPreview(data, file) {
             
             ${data.duplicates.length > 0 ? `
                 <div>
-                    <h4 class="font-semibold mb-2 text-yellow-600">Duplicates (will be skipped):</h4>
+                    <h4 class="font-semibold mb-2 text-yellow-600">${i18n?.t('duplicatesWillBeSkipped') || 'Duplicates (will be skipped):'}</h4>
                     <div class="space-y-1 text-sm">
                         ${data.duplicates.map(e => `<div>${e.name} - ${e.birthday}</div>`).join('')}
                     </div>
@@ -1539,16 +1875,16 @@ async function handleCSVImport() {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Import completed successfully!', 'success');
+            showToast(result.message || i18n?.t('importSuccess') || 'Import completed successfully!', 'success');
             document.getElementById('csv-preview-modal').classList.add('hidden');
             releaseFocusTrap();
             fetchBirthdays();
         } else {
-            showToast(result.error || 'Failed to import CSV', 'error');
+            showToast(result.error || i18n?.t('failedToImportCSV') || 'Failed to import CSV', 'error');
         }
     } catch (error) {
         console.error('Error importing CSV:', error);
-        showToast('Failed to import CSV', 'error');
+        showToast(i18n?.t('failedToImportCSV') || 'Failed to import CSV', 'error');
     } finally {
         window.pendingCSVFile = null;
     }
@@ -1625,7 +1961,7 @@ async function handlePreviewDigest() {
         
         if (!response.ok) {
             const error = await response.json();
-            showToast(error.error || 'Failed to preview digest', 'error');
+            showToast(error.error || i18n?.t('failedToPreviewDigest') || 'Failed to preview digest', 'error');
             return;
         }
         
@@ -1652,7 +1988,7 @@ async function handlePreviewDigest() {
         preview.classList.remove('hidden');
     } catch (error) {
         console.error('Error previewing digest:', error);
-        showToast('Failed to preview digest', 'error');
+        showToast(i18n?.t('failedToPreviewDigest') || 'Failed to preview digest', 'error');
     }
 }
 
@@ -1668,12 +2004,12 @@ async function handleSendDigest() {
         const result = await response.json();
         
         if (response.ok) {
-            showToast(result.message || 'Digest sent successfully!', 'success');
+            showToast(result.message || i18n?.t('digestSendSuccess') || 'Digest sent successfully!', 'success');
         } else {
-            showToast(result.error || 'Failed to send digest', 'error');
+            showToast(result.error || i18n?.t('failedToSendDigest') || 'Failed to send digest', 'error');
         }
     } catch (error) {
         console.error('Error sending digest:', error);
-        showToast('Failed to send digest', 'error');
+        showToast(i18n?.t('failedToSendDigest') || 'Failed to send digest', 'error');
     }
 }

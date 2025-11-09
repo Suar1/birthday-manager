@@ -1,0 +1,24 @@
+services:
+  birthday-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: birthday-manager
+    ports:
+      - "4040:4040"
+    volumes:
+      # Persist data directory
+      - ./data:/app/data
+      # Persist uploads
+      - ./uploads:/app/uploads
+    environment:
+      - BIRTHDAY_REMINDER_PORTABLE=true
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4040/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
