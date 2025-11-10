@@ -277,10 +277,85 @@
                                 class="w-full px-4 py-2 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
                         </div>
                         <div>
-                            <label for="smtp-password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">SMTP Password *</label>
-                            <input type="password" id="smtp-password" name="smtpPassword" required
+                            <label for="smtp-password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">SMTP Password</label>
+                            <input type="password" id="smtp-password" name="smtpPassword"
                                 class="w-full px-4 py-2 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Required for non-Gmail servers. For Gmail, use OAuth2 (recommended) or App Password.</p>
                         </div>
+                        
+                        <!-- OAuth2 (Gmail) Section -->
+                        <div id="oauth2-section" class="hidden space-y-4 p-4 bg-blue-50/50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-sm font-semibold text-gray-800 dark:text-white">OAuth2 (Gmail) - Recommended</h3>
+                                <a href="https://developers.google.com/gmail/api/quickstart/python" target="_blank" rel="noopener noreferrer" 
+                                   class="text-xs text-blue-600 dark:text-blue-400 hover:underline">Setup Guide</a>
+                            </div>
+                            <p class="text-xs text-gray-600 dark:text-gray-400">
+                                OAuth2 is more secure than App Passwords. Get Client ID and Secret from 
+                                <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" 
+                                   class="text-blue-600 dark:text-blue-400 hover:underline">Google Cloud Console</a>.
+                            </p>
+                            <div>
+                                <label for="google-client-id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Google Client ID *</label>
+                                <input type="text" id="google-client-id" name="googleClientId"
+                                    class="w-full px-4 py-2 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label for="google-client-secret" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Google Client Secret *</label>
+                                <input type="password" id="google-client-secret" name="googleClientSecret"
+                                    class="w-full px-4 py-2 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            
+                            <!-- Device Flow Connection -->
+                            <div id="oauth-connect-section" class="space-y-3">
+                                <button type="button" id="connect-gmail-btn" 
+                                    class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-xl transition-colors font-medium">
+                                    Connect Gmail (OAuth2)
+                                </button>
+                                
+                                <!-- Step 1: Show verification code -->
+                                <div id="oauth-step1" class="hidden space-y-2 p-3 bg-white/70 dark:bg-gray-800/70 rounded-lg">
+                                    <p class="text-sm font-medium text-gray-800 dark:text-white">Step 1: Verify on Google</p>
+                                    <p class="text-xs text-gray-600 dark:text-gray-400">Visit this URL and enter the code:</p>
+                                    <div class="flex items-center gap-2">
+                                        <input type="text" id="oauth-verification-url" readonly
+                                            class="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 text-sm rounded border border-gray-300 dark:border-gray-600">
+                                        <button type="button" id="copy-url-btn" 
+                                            class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors">
+                                            Copy URL
+                                        </button>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <input type="text" id="oauth-user-code" readonly
+                                            class="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 text-sm font-mono font-bold text-center rounded border border-gray-300 dark:border-gray-600">
+                                        <button type="button" id="copy-code-btn" 
+                                            class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors">
+                                            Copy Code
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Step 2: Polling status -->
+                                <div id="oauth-step2" class="hidden space-y-2 p-3 bg-white/70 dark:bg-gray-800/70 rounded-lg">
+                                    <p class="text-sm font-medium text-gray-800 dark:text-white">Step 2: Waiting for authorization...</p>
+                                    <div class="flex items-center gap-2">
+                                        <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                                        <span id="oauth-status-text" class="text-xs text-gray-600 dark:text-gray-400">Connecting...</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Success state -->
+                                <div id="oauth-success" class="hidden p-3 bg-green-100 dark:bg-green-900/30 rounded-lg border border-green-300 dark:border-green-700">
+                                    <p class="text-sm font-medium text-green-800 dark:text-green-300 flex items-center gap-2">
+                                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                        </svg>
+                                        Connected
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <div>
                             <label for="recipient-email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Recipient Email *</label>
                             <input type="email" id="recipient-email" name="recipientEmail" required

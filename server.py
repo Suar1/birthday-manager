@@ -13,7 +13,14 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
+from email.message import EmailMessage
 import logging
+import urllib.request
+import urllib.parse
+import urllib.error
+import json
+import base64
+from typing import Dict, Tuple
 
 # Configure logging - sanitize sensitive data
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +73,236 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 def allowed_file(filename: str) -> bool:
     """Check if file extension is allowed."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def fetch_access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
+    """
+    Fetch OAuth2 access token from Google using refresh token.
+    
+    Args:
+        client_id: Google OAuth2 client ID
+        client_secret: Google OAuth2 client secret
+        refresh_token: OAuth2 refresh token
+        
+    Returns:
+        Access token string
+        
+    Raises:
+        Exception: If token fetch fails
+    """
+    token_url = "https://oauth2.googleapis.com/token"
+    
+    data = urllib.parse.urlencode({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token"
+    }).encode("utf-8")
+    
+    req = urllib.request.Request(token_url, data=data, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            if "access_token" not in result:
+                raise Exception(f"Token response missing access_token: {result.get('error', 'Unknown error')}")
+            return result["access_token"]
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else "Unknown error"
+        try:
+            error_json = json.loads(error_body)
+            error_msg = error_json.get("error_description", error_json.get("error", "Unknown error"))
+        except:
+            error_msg = error_body
+        raise Exception(f"Failed to fetch access token: {error_msg}")
+    except Exception as e:
+        raise Exception(f"Failed to fetch access token: {str(e)}")
+
+
+def build_xoauth2_string(email: str, access_token: str) -> str:
+    """
+    Build XOAUTH2 authentication string for SMTP.
+    
+    Args:
+        email: Gmail address
+        access_token: OAuth2 access token
+        
+    Returns:
+        Base64-encoded XOAUTH2 string
+    """
+    auth_string = f"user={email}\x01auth=Bearer {access_token}\x01\x01"
+    return base64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
+
+
+def send_gmail_oauth2(
+    smtp_server: str,
+    smtp_port: int,
+    email: str,
+    access_token: str,
+    msg: EmailMessage,
+    timeout: int = 20
+) -> None:
+    """
+    Send email via Gmail SMTP using XOAUTH2 authentication.
+    
+    Args:
+        smtp_server: SMTP server address
+        smtp_port: SMTP port
+        email: Gmail address
+        access_token: OAuth2 access token
+        msg: EmailMessage object to send
+        timeout: Connection timeout in seconds
+        
+    Raises:
+        smtplib.SMTPException: If sending fails
+    """
+    xoauth2_string = build_xoauth2_string(email, access_token)
+    
+    with smtplib.SMTP(smtp_server, smtp_port, timeout=timeout) as s:
+        s.ehlo()
+        s.starttls()
+        s.ehlo()
+        # Authenticate using XOAUTH2
+        # Send AUTH XOAUTH2 command with base64-encoded string
+        code, response = s.docmd("AUTH", "XOAUTH2 " + xoauth2_string)
+        if code != 235:
+            raise smtplib.SMTPAuthenticationError(code, response)
+        s.send_message(msg)
+
+
+def should_use_oauth2(settings: Dict) -> bool:
+    """
+    Determine if OAuth2 should be used for SMTP authentication.
+    
+    Args:
+        settings: SMTP settings dictionary
+        
+    Returns:
+        True if OAuth2 should be used, False otherwise
+    """
+    smtp_server = settings.get("smtpServer", "").lower()
+    is_gmail = "gmail.com" in smtp_server or smtp_server == "smtp.gmail.com"
+    
+    if not is_gmail:
+        return False
+    
+    # Check if OAuth2 credentials are present (refresh token can be encrypted or plain)
+    has_refresh_token = bool(settings.get("googleRefreshToken") or settings.get("googleRefreshTokenEncrypted"))
+    has_oauth2 = all([
+        settings.get("googleClientId"),
+        settings.get("googleClientSecret"),
+        has_refresh_token
+    ])
+    
+    return has_oauth2
+
+
+def send_email_with_auth(settings: Dict, msg) -> None:
+    """
+    Send email using appropriate authentication method (OAuth2 or password).
+    Supports both EmailMessage and MIMEMultipart.
+    
+    Args:
+        settings: SMTP settings dictionary
+        msg: EmailMessage or MIMEMultipart object to send
+        
+    Raises:
+        smtplib.SMTPException: If sending fails
+        Exception: If OAuth2 token fetch fails
+    """
+    smtp_server = settings["smtpServer"]
+    smtp_port = int(settings["smtpPort"])
+    smtp_email = settings["smtpEmail"]
+    
+    if should_use_oauth2(settings):
+        # Use OAuth2 authentication
+        try:
+            access_token = fetch_access_token(
+                settings["googleClientId"],
+                settings["googleClientSecret"],
+                settings["googleRefreshToken"]
+            )
+            # For OAuth2, we need EmailMessage - convert if needed
+            if isinstance(msg, MIMEMultipart):
+                # Convert MIMEMultipart to EmailMessage for OAuth2
+                email_msg = EmailMessage()
+                email_msg["From"] = msg["From"]
+                email_msg["To"] = msg["To"]
+                email_msg["Subject"] = msg["Subject"]
+                # Extract text/html content from MIMEMultipart
+                html_content = None
+                text_content = None
+                for part in msg.walk():
+                    content_type = part.get_content_type()
+                    if content_type == "text/html":
+                        html_content = part.get_payload(decode=True).decode("utf-8")
+                    elif content_type == "text/plain":
+                        text_content = part.get_payload(decode=True).decode("utf-8")
+                
+                # Set content (prefer HTML if available)
+                if html_content:
+                    email_msg.set_content(html_content, subtype="html")
+                elif text_content:
+                    email_msg.set_content(text_content)
+                else:
+                    # Fallback: get all text parts
+                    email_msg.set_content(str(msg))
+                
+                send_gmail_oauth2(smtp_server, smtp_port, smtp_email, access_token, email_msg)
+            else:
+                send_gmail_oauth2(smtp_server, smtp_port, smtp_email, access_token, msg)
+        except Exception as e:
+            # Log error without exposing secrets
+            sanitized_error = re.sub(r'(client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+            logger.error(f"OAuth2 authentication failed: {sanitized_error}")
+            raise
+    else:
+        # Use password authentication
+        smtp_password = settings["smtpPassword"]
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=20) as s:
+            s.ehlo()
+            s.starttls()
+            s.ehlo()
+            s.login(smtp_email, smtp_password)
+            s.send_message(msg)
+
+
+def get_smtp_error_message(error: Exception) -> Tuple[str, int]:
+    """
+    Get user-friendly error message for SMTP errors.
+    
+    Returns:
+        Tuple of (error_message, http_status_code)
+    """
+    error_str = str(error)
+    error_code = getattr(error, 'smtp_code', None)
+    
+    # Map authentication errors to 401
+    if isinstance(error, smtplib.SMTPAuthenticationError) or error_code in [535, 534]:
+        if error_code == 534 or "Application-specific password required" in error_str or "InvalidSecondFactor" in error_str:
+            return (
+                "Gmail requires an App Password or OAuth2. "
+                "Use OAuth2 (recommended) or generate an App Password in Google Account settings.",
+                401
+            )
+        return ("SMTP authentication failed. Check your credentials.", 401)
+    
+    # Check for Gmail App Password requirement (legacy)
+    if "Application-specific password required" in error_str or "InvalidSecondFactor" in error_str:
+        return (
+            "Gmail requires an App Password instead of your regular password. "
+            "Please follow these steps:\n\n"
+            "1. Go to your Google Account settings\n"
+            "2. Enable 2-Step Verification (if not already enabled)\n"
+            "3. Go to Security → App passwords\n"
+            "4. Generate a new App Password for 'Mail'\n"
+            "5. Use that 16-character App Password in the SMTP Password field\n\n"
+            "For more help: https://support.google.com/mail/?p=InvalidSecondFactor",
+            401
+        )
+    
+    return (f"SMTP error: {error_str}", 500)
 
 
 def get_portable_mode() -> bool:
@@ -210,12 +447,16 @@ def api_delete_birthday(birthday_id):
 
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
-    """Get SMTP configuration. Never returns password."""
+    """Get SMTP configuration. Never returns passwords or secrets."""
     try:
         portable = get_portable_mode()
         settings = get_smtp_settings(portable)
-        # Security: Never return password in any response
-        safe_settings = {k: v for k, v in settings.items() if k != "smtpPassword"}
+        # Security: Never return passwords or OAuth2 secrets in any response
+        # googleClientId is safe to return (it's public), but secrets are not
+        safe_settings = {
+            k: v for k, v in settings.items() 
+            if k not in ["smtpPassword", "googleClientSecret", "googleRefreshToken"]
+        }
         return jsonify(safe_settings)
     except Exception as e:
         logger.error(f"Error getting config: {str(e)}")
@@ -253,9 +494,148 @@ def api_reset_config():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/oauth/device/init", methods=["POST"])
+def api_oauth_device_init():
+    """Initialize Gmail OAuth2 device flow."""
+    try:
+        portable = get_portable_mode()
+        settings = get_smtp_settings(portable)
+        
+        # Check if client ID and secret are configured
+        client_id = settings.get("googleClientId")
+        client_secret = settings.get("googleClientSecret")
+        
+        if not client_id or not client_secret:
+            return jsonify({
+                "error": "Google Client ID and Secret must be configured first. Please enter them in SMTP Settings."
+            }), 400
+        
+        # Call Google device code endpoint
+        device_url = "https://oauth2.googleapis.com/device/code"
+        data = urllib.parse.urlencode({
+            "client_id": client_id,
+            "scope": "https://mail.google.com/"
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(device_url, data=data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                
+                if "device_code" not in result or "user_code" not in result:
+                    return jsonify({
+                        "error": f"Failed to initialize device flow: {result.get('error', 'Unknown error')}"
+                    }), 500
+                
+                # Store device_code temporarily (in-memory, expires after interval)
+                # In production, you might want to use Redis or similar
+                # For now, return it to client to poll with
+                return jsonify({
+                    "device_code": result["device_code"],
+                    "user_code": result["user_code"],
+                    "verification_url": result.get("verification_url", "https://www.google.com/device"),
+                    "interval": result.get("interval", 5),
+                    "expires_in": result.get("expires_in", 1800)
+                })
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else "Unknown error"
+            try:
+                error_json = json.loads(error_body)
+                error_msg = error_json.get("error_description", error_json.get("error", "Unknown error"))
+            except:
+                error_msg = error_body
+            sanitized = re.sub(r'(client_id|client_secret)\s*[:=]\s*\S+', r'\1: [REDACTED]', error_msg, flags=re.IGNORECASE)
+            logger.error(f"Device flow init failed: {sanitized}")
+            return jsonify({"error": f"Failed to initialize device flow: {error_msg}"}), 500
+    except Exception as e:
+        sanitized = re.sub(r'(client_id|client_secret|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Error initializing device flow: {sanitized}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/oauth/device/poll", methods=["POST"])
+def api_oauth_device_poll():
+    """Poll for OAuth2 device flow authorization and store refresh token."""
+    try:
+        portable = get_portable_mode()
+        data = request.get_json()
+        
+        if not data or not data.get("device_code"):
+            return jsonify({"error": "device_code is required"}), 400
+        
+        device_code = data["device_code"]
+        settings = get_smtp_settings(portable)
+        
+        client_id = settings.get("googleClientId")
+        client_secret = settings.get("googleClientSecret")
+        
+        if not client_id or not client_secret:
+            return jsonify({"error": "Google Client ID and Secret must be configured"}), 400
+        
+        # Poll Google token endpoint
+        token_url = "https://oauth2.googleapis.com/token"
+        poll_data = urllib.parse.urlencode({
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(token_url, data=poll_data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                
+                if "error" in result:
+                    error = result["error"]
+                    if error == "authorization_pending":
+                        return jsonify({"status": "pending", "message": "Waiting for authorization..."}), 200
+                    elif error == "slow_down":
+                        return jsonify({"status": "slow_down", "message": "Please wait before polling again"}), 200
+                    elif error == "expired_token":
+                        return jsonify({"status": "expired", "error": "Device code expired. Please start over."}), 400
+                    else:
+                        return jsonify({"status": "error", "error": result.get("error_description", error)}), 400
+                
+                if "refresh_token" not in result:
+                    return jsonify({"status": "error", "error": "No refresh token in response"}), 500
+                
+                # Store refresh token (encrypted) and update settings
+                refresh_token = result["refresh_token"]
+                settings["googleRefreshToken"] = refresh_token
+                save_smtp_settings(settings, portable)
+                
+                # Never return the refresh token to client
+                return jsonify({
+                    "status": "success",
+                    "message": "Gmail OAuth2 connected successfully!"
+                })
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else "Unknown error"
+            try:
+                error_json = json.loads(error_body)
+                error = error_json.get("error", "unknown_error")
+                if error == "authorization_pending":
+                    return jsonify({"status": "pending", "message": "Waiting for authorization..."}), 200
+                error_msg = error_json.get("error_description", error)
+            except:
+                error_msg = error_body
+            sanitized = re.sub(r'(client_id|client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', error_msg, flags=re.IGNORECASE)
+            logger.error(f"Device flow poll failed: {sanitized}")
+            return jsonify({"status": "error", "error": error_msg}), 500
+    except Exception as e:
+        sanitized = re.sub(r'(client_id|client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Error polling device flow: {sanitized}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 @app.route("/api/test-email", methods=["POST"])
 def api_test_email():
-    """Send a test email using SMTP settings."""
+    """Send a test email using SMTP settings (OAuth2 or password auth)."""
     try:
         portable = get_portable_mode()
         settings = get_smtp_settings(portable)
@@ -263,25 +643,31 @@ def api_test_email():
         if not settings:
             return jsonify({"error": "SMTP settings are not configured"}), 400
         
-        # Create email
-        msg = MIMEMultipart()
+        # Create email using EmailMessage
+        msg = EmailMessage()
+        msg["Subject"] = "Birthday Manager – SMTP test"
         msg["From"] = settings["smtpEmail"]
         msg["To"] = settings["recipientEmail"]
-        msg["Subject"] = "Test Email from Birthday Manager"
+        msg.set_content("SMTP is working. 🎉")
         
-        body = "This is a test email from the Birthday Manager application."
-        msg.attach(MIMEText(body, "plain"))
-        
-        # Send email
-        with smtplib.SMTP(settings["smtpServer"], int(settings["smtpPort"])) as server:
-            server.starttls()
-            server.login(settings["smtpEmail"], settings["smtpPassword"])
-            server.send_message(msg)
+        # Send email using appropriate authentication method
+        send_email_with_auth(settings, msg)
         
         return jsonify({"message": "Test email sent successfully!"})
     except smtplib.SMTPException as e:
-        return jsonify({"error": f"SMTP error: {str(e)}"}), 500
+        error_msg, status_code = get_smtp_error_message(e)
+        # Never log secrets - sanitize error message
+        sanitized_error = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"SMTP error sending test email: {sanitized_error}")
+        return jsonify({"error": error_msg}), status_code
     except Exception as e:
+        # Check if it's an OAuth2 token fetch error
+        error_str = str(e)
+        if "access token" in error_str.lower() or "oauth" in error_str.lower():
+            sanitized_error = re.sub(r'(client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', error_str, flags=re.IGNORECASE)
+            logger.error(f"OAuth2 error sending test email: {sanitized_error}")
+            return jsonify({"error": "OAuth2 authentication failed. Check your Client ID, Secret, and Refresh Token."}), 401
+        logger.error(f"Error sending test email: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -321,16 +707,14 @@ def api_test_reminder():
                             img.add_header("Content-ID", f"<photo_{birthday['id']}>")
                             msg.attach(img)
                 
-                # Send email
-                with smtplib.SMTP(settings["smtpServer"], int(settings["smtpPort"])) as server:
-                    server.starttls()
-                    server.login(settings["smtpEmail"], settings["smtpPassword"])
-                    server.send_message(msg)
+                # Send email using appropriate authentication method
+                send_email_with_auth(settings, msg)
                 
                 sent_count += 1
-            except Exception as e:
+            except (smtplib.SMTPException, Exception) as e:
                 # Log error but continue with other birthdays
-                print(f"Failed to send reminder for {birthday.get('name', 'unknown')}: {e}")
+                sanitized_error = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+                logger.error(f"Failed to send reminder for {birthday.get('name', 'unknown')}: {sanitized_error}")
         
         return jsonify({"message": f"Test reminder emails sent for {sent_count} birthday(s)"})
     except Exception as e:
@@ -728,19 +1112,24 @@ def api_digest_send():
         msg["Subject"] = f"Birthday Digest - Next {days_ahead} Days"
         msg.attach(MIMEText(html_content, "html"))
         
-        with smtplib.SMTP(settings["smtpServer"], int(settings["smtpPort"])) as server:
-            server.starttls()
-            server.login(settings["smtpEmail"], settings["smtpPassword"])
-            server.send_message(msg)
+        # Send email using appropriate authentication method
+        send_email_with_auth(settings, msg)
         
         return jsonify({
             "message": f"Digest sent successfully with {len(upcoming)} birthdays",
             "count": len(upcoming)
         })
     except smtplib.SMTPException as e:
-        logger.error(f"SMTP error sending digest: {str(e)}")
-        return jsonify({"error": f"SMTP error: {str(e)}"}), 500
+        error_msg, status_code = get_smtp_error_message(e)
+        sanitized_error = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"SMTP error sending digest: {sanitized_error}")
+        return jsonify({"error": error_msg}), status_code
     except Exception as e:
+        error_str = str(e)
+        if "access token" in error_str.lower() or "oauth" in error_str.lower():
+            sanitized_error = re.sub(r'(client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', error_str, flags=re.IGNORECASE)
+            logger.error(f"OAuth2 error sending digest: {sanitized_error}")
+            return jsonify({"error": "OAuth2 authentication failed. Check your Client ID, Secret, and Refresh Token."}), 401
         logger.error(f"Error sending digest: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
