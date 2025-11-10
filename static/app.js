@@ -133,26 +133,41 @@ function setupEventListeners() {
     document.getElementById('add-birthday-form')?.addEventListener('submit', handleAddBirthday);
     document.getElementById('smtp-form')?.addEventListener('submit', handleSaveSMTP);
     
-    // Toggle OAuth2 section when SMTP server changes
-    document.getElementById('smtp-server')?.addEventListener('input', toggleOAuth2Section);
-    document.getElementById('smtp-server')?.addEventListener('change', toggleOAuth2Section);
+    // Auth type selector
+    document.getElementById('auth-type')?.addEventListener('change', toggleAuthFields);
     
-    // OAuth2 device flow handlers
+    // OAuth modal handlers
     document.getElementById('connect-gmail-btn')?.addEventListener('click', handleConnectGmail);
-    document.getElementById('copy-url-btn')?.addEventListener('click', () => {
-        const urlInput = document.getElementById('oauth-verification-url');
+    document.getElementById('close-oauth-modal')?.addEventListener('click', closeOAuthModal);
+    document.getElementById('oauth-tab-desktop')?.addEventListener('click', () => switchOAuthTab('desktop'));
+    document.getElementById('oauth-tab-device')?.addEventListener('click', () => switchOAuthTab('device'));
+    
+    // Desktop OAuth
+    document.getElementById('oauth-desktop-start')?.addEventListener('click', handleDesktopOAuthStart);
+    
+    // Device Code OAuth
+    document.getElementById('oauth-device-poll')?.addEventListener('click', handleDeviceOAuthPoll);
+    document.getElementById('copy-device-url-btn')?.addEventListener('click', () => {
+        const urlInput = document.getElementById('oauth-device-url');
         if (urlInput) {
             urlInput.select();
             document.execCommand('copy');
             showToast('URL copied to clipboard', 'success');
         }
     });
-    document.getElementById('copy-code-btn')?.addEventListener('click', () => {
-        const codeInput = document.getElementById('oauth-user-code');
+    document.getElementById('copy-device-code-btn')?.addEventListener('click', () => {
+        const codeInput = document.getElementById('oauth-device-code');
         if (codeInput) {
             codeInput.select();
             document.execCommand('copy');
             showToast('Code copied to clipboard', 'success');
+        }
+    });
+    
+    // Initialize device code flow when switching to device tab
+    document.getElementById('oauth-tab-device')?.addEventListener('click', () => {
+        if (!oauthModalState.deviceCode) {
+            handleDeviceOAuthInit();
         }
     });
     
@@ -1525,15 +1540,21 @@ async function deleteBirthday(id) {
 // ============================================================================
 // CONFIG & SMTP FUNCTIONS
 // ============================================================================
-function toggleOAuth2Section() {
-    const smtpServer = document.getElementById('smtp-server').value.toLowerCase();
-    const oauth2Section = document.getElementById('oauth2-section');
-    const isGmail = smtpServer.includes('gmail.com') || smtpServer === 'smtp.gmail.com';
+
+function toggleAuthFields() {
+    const authType = document.getElementById('auth-type').value;
+    const appPasswordFields = document.getElementById('app-password-fields');
+    const oauth2Fields = document.getElementById('oauth2-fields');
     
-    if (isGmail) {
-        oauth2Section.classList.remove('hidden');
+    if (authType === 'app_password') {
+        appPasswordFields.classList.remove('hidden');
+        oauth2Fields.classList.add('hidden');
+    } else if (authType === 'oauth2') {
+        appPasswordFields.classList.add('hidden');
+        oauth2Fields.classList.remove('hidden');
     } else {
-        oauth2Section.classList.add('hidden');
+        appPasswordFields.classList.add('hidden');
+        oauth2Fields.classList.add('hidden');
     }
 }
 
@@ -1543,33 +1564,82 @@ async function loadConfig() {
         if (!response.ok) return;
         
         const config = await response.json();
-        if (config.smtpServer) {
-            document.getElementById('smtp-server').value = config.smtpServer;
-            toggleOAuth2Section(); // Show/hide OAuth2 section based on server
-        }
+        if (config.smtpServer) document.getElementById('smtp-server').value = config.smtpServer;
         if (config.smtpPort) document.getElementById('smtp-port').value = config.smtpPort;
         if (config.smtpEmail) document.getElementById('smtp-email').value = config.smtpEmail;
         if (config.recipientEmail) document.getElementById('recipient-email').value = config.recipientEmail;
+        
+        // Load auth type
+        if (config.authType) {
+            document.getElementById('auth-type').value = config.authType;
+            toggleAuthFields();
+        }
+        
         // OAuth2 Client ID is safe to return (it's public)
         if (config.googleClientId) {
             document.getElementById('google-client-id').value = config.googleClientId;
         }
-        // Check if OAuth2 is already connected (refresh token exists server-side)
-        // We can't check directly, but we'll show success state if we detect Gmail + Client ID
-        if (config.smtpServer && (config.smtpServer.includes('gmail.com') || config.smtpServer === 'smtp.gmail.com')) {
-            if (config.googleClientId) {
-                // Assume connected if client ID exists (user can test with Test SMTP button)
-                // In a real implementation, you might want an endpoint to check connection status
-            }
+        
+        // Show connected state if OAuth2 is configured
+        if (config.authType === 'oauth2' && config.googleClientId) {
+            document.getElementById('oauth-connected').classList.remove('hidden');
         }
-        // Secrets are never returned by API for security
     } catch (error) {
         console.error('Error loading config:', error);
     }
 }
 
-let deviceFlowInterval = null;
-let deviceCode = null;
+// OAuth Modal State
+let oauthModalState = {
+    currentTab: 'desktop',
+    desktopState: null,
+    deviceCode: null,
+    deviceInterval: null,
+    loopbackListener: null
+};
+
+function openOAuthModal() {
+    document.getElementById('oauth-modal').classList.remove('hidden');
+    // Reset to desktop tab
+    switchOAuthTab('desktop');
+}
+
+function closeOAuthModal() {
+    document.getElementById('oauth-modal').classList.add('hidden');
+    // Clean up
+    if (oauthModalState.deviceInterval) {
+        clearInterval(oauthModalState.deviceInterval);
+        oauthModalState.deviceInterval = null;
+    }
+    if (oauthModalState.loopbackListener) {
+        oauthModalState.loopbackListener.close();
+        oauthModalState.loopbackListener = null;
+    }
+}
+
+function switchOAuthTab(tab) {
+    oauthModalState.currentTab = tab;
+    const desktopTab = document.getElementById('oauth-tab-desktop');
+    const deviceTab = document.getElementById('oauth-tab-device');
+    const desktopContent = document.getElementById('oauth-content-desktop');
+    const deviceContent = document.getElementById('oauth-content-device');
+    
+    if (tab === 'desktop') {
+        desktopTab.classList.add('text-blue-600', 'dark:text-blue-400', 'border-b-2', 'border-blue-600', 'dark:border-blue-400');
+        desktopTab.classList.remove('text-gray-500', 'dark:text-gray-400');
+        deviceTab.classList.remove('text-blue-600', 'dark:text-blue-400', 'border-b-2', 'border-blue-600', 'dark:border-blue-400');
+        deviceTab.classList.add('text-gray-500', 'dark:text-gray-400');
+        desktopContent.classList.remove('hidden');
+        deviceContent.classList.add('hidden');
+    } else {
+        deviceTab.classList.add('text-blue-600', 'dark:text-blue-400', 'border-b-2', 'border-blue-600', 'dark:border-blue-400');
+        deviceTab.classList.remove('text-gray-500', 'dark:text-gray-400');
+        desktopTab.classList.remove('text-blue-600', 'dark:text-blue-400', 'border-b-2', 'border-blue-600', 'dark:border-blue-400');
+        desktopTab.classList.add('text-gray-500', 'dark:text-gray-400');
+        deviceContent.classList.remove('hidden');
+        desktopContent.classList.add('hidden');
+    }
+}
 
 async function handleConnectGmail() {
     const clientId = document.getElementById('google-client-id').value;
@@ -1590,6 +1660,7 @@ async function handleConnectGmail() {
                 smtpPort: parseInt(document.getElementById('smtp-port').value) || 587,
                 smtpEmail: document.getElementById('smtp-email').value || '',
                 recipientEmail: document.getElementById('recipient-email').value || '',
+                authType: 'oauth2',
                 googleClientId: clientId,
                 googleClientSecret: clientSecret
             })
@@ -1597,7 +1668,8 @@ async function handleConnectGmail() {
         
         if (!saveResponse.ok) {
             const result = await saveResponse.json();
-            showToast(result.error || 'Failed to save credentials', 'error');
+            const errorMsg = result.details ? result.details.join(', ') : (result.error || 'Failed to save credentials');
+            showToast(errorMsg, 'error');
             return;
         }
     } catch (error) {
@@ -1605,7 +1677,76 @@ async function handleConnectGmail() {
         return;
     }
     
-    // Initialize device flow
+    openOAuthModal();
+}
+
+// Desktop Loopback OAuth Flow
+async function handleDesktopOAuthStart() {
+    try {
+        const response = await fetch(`${API_BASE}/api/oauth/desktop/init`, {
+            method: 'POST'
+        });
+        
+        const result = await response.json();
+        
+        if (!result.ok) {
+            showToast(result.hint || result.error || 'Failed to initialize OAuth', 'error');
+            return;
+        }
+        
+        oauthModalState.desktopState = result.state;
+        
+        // Show status
+        document.getElementById('oauth-desktop-status').classList.remove('hidden');
+        document.getElementById('oauth-desktop-status-text').textContent = 'Opening consent page...';
+        
+        // Open consent URL in new window
+        window.open(result.auth_url, 'oauth-consent', 'width=600,height=700');
+        
+        // Start loopback listener (simplified - in production, you'd use a proper HTTP server)
+        // For now, we'll poll the status endpoint
+        startDesktopPolling(result.state);
+        
+    } catch (error) {
+        console.error('Error starting desktop OAuth:', error);
+        showToast('Failed to start OAuth flow', 'error');
+    }
+}
+
+function startDesktopPolling(state) {
+    const poll = async () => {
+        try {
+            const response = await fetch(`${API_BASE}/api/oauth/desktop/status?state=${encodeURIComponent(state)}`);
+            const result = await response.json();
+            
+            if (result.status === 'success' || !result.ok) {
+                clearInterval(oauthModalState.deviceInterval);
+                oauthModalState.deviceInterval = null;
+                
+                if (result.status === 'success') {
+                    document.getElementById('oauth-desktop-status-text').textContent = 'Connected successfully!';
+                    setTimeout(() => {
+                        closeOAuthModal();
+                        document.getElementById('oauth-connected').classList.remove('hidden');
+                        loadConfig();
+                        showToast('Gmail OAuth2 connected successfully!', 'success');
+                    }, 1000);
+                } else {
+                    document.getElementById('oauth-desktop-status').classList.add('hidden');
+                    showToast(result.hint || 'Authorization failed or expired', 'error');
+                }
+            }
+        } catch (error) {
+            console.error('Error polling desktop status:', error);
+        }
+    };
+    
+    poll();
+    oauthModalState.deviceInterval = setInterval(poll, 2000);
+}
+
+// Device Code OAuth Flow
+async function handleDeviceOAuthInit() {
     try {
         const response = await fetch(`${API_BASE}/api/oauth/device/init`, {
             method: 'POST'
@@ -1613,124 +1754,107 @@ async function handleConnectGmail() {
         
         const result = await response.json();
         
-        if (!response.ok) {
-            showToast(result.error || 'Failed to initialize OAuth flow', 'error');
+        if (!result.ok) {
+            showToast(result.hint || result.error || 'Failed to initialize device flow', 'error');
             return;
         }
         
-        // Show step 1
-        document.getElementById('oauth-step1').classList.remove('hidden');
-        document.getElementById('oauth-step2').classList.add('hidden');
-        document.getElementById('oauth-success').classList.add('hidden');
-        document.getElementById('connect-gmail-btn').disabled = true;
+        // Populate fields
+        document.getElementById('oauth-device-url').value = result.verification_url;
+        document.getElementById('oauth-device-code').value = result.user_code;
         
-        // Populate verification URL and code
-        document.getElementById('oauth-verification-url').value = result.verification_url;
-        document.getElementById('oauth-user-code').value = result.user_code;
-        
-        deviceCode = result.device_code;
-        const interval = result.interval * 1000 || 5000; // Convert to milliseconds
-        
-        // Start polling after a short delay
-        setTimeout(() => {
-            startPolling(deviceCode, interval);
-        }, interval);
+        oauthModalState.deviceCode = result.device_code;
         
     } catch (error) {
         console.error('Error initializing device flow:', error);
-        showToast('Failed to initialize OAuth flow', 'error');
+        showToast('Failed to initialize device flow', 'error');
     }
 }
 
-function startPolling(deviceCode, interval) {
-    // Show step 2
-    document.getElementById('oauth-step2').classList.remove('hidden');
-    document.getElementById('oauth-status-text').textContent = 'Waiting for authorization...';
+async function handleDeviceOAuthPoll() {
+    if (!oauthModalState.deviceCode) {
+        await handleDeviceOAuthInit();
+        return;
+    }
+    
+    document.getElementById('oauth-device-status').classList.remove('hidden');
+    document.getElementById('oauth-device-status-text').textContent = 'Checking authorization...';
     
     const poll = async () => {
         try {
             const response = await fetch(`${API_BASE}/api/oauth/device/poll`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ device_code: deviceCode })
+                body: JSON.stringify({ device_code: oauthModalState.deviceCode })
             });
             
             const result = await response.json();
             
-            if (result.status === 'success') {
-                // Success!
-                clearInterval(deviceFlowInterval);
-                deviceFlowInterval = null;
-                deviceCode = null;
+            if (result.ok && result.status === 'success') {
+                clearInterval(oauthModalState.deviceInterval);
+                oauthModalState.deviceInterval = null;
+                oauthModalState.deviceCode = null;
                 
-                document.getElementById('oauth-step1').classList.add('hidden');
-                document.getElementById('oauth-step2').classList.add('hidden');
-                document.getElementById('oauth-success').classList.remove('hidden');
-                document.getElementById('connect-gmail-btn').disabled = false;
-                document.getElementById('connect-gmail-btn').textContent = 'Reconnect Gmail';
-                
-                showToast(result.message || 'Gmail OAuth2 connected successfully!', 'success');
-                
-                // Reload config to refresh UI
-                loadConfig();
+                document.getElementById('oauth-device-status-text').textContent = 'Connected successfully!';
+                setTimeout(() => {
+                    closeOAuthModal();
+                    document.getElementById('oauth-connected').classList.remove('hidden');
+                    loadConfig();
+                    showToast(result.message || 'Gmail OAuth2 connected successfully!', 'success');
+                }, 1000);
             } else if (result.status === 'pending' || result.status === 'slow_down') {
-                // Keep polling
-                document.getElementById('oauth-status-text').textContent = result.message || 'Waiting for authorization...';
+                document.getElementById('oauth-device-status-text').textContent = result.message || 'Waiting for authorization...';
             } else if (result.status === 'expired') {
-                // Expired, reset
-                clearInterval(deviceFlowInterval);
-                deviceFlowInterval = null;
-                deviceCode = null;
-                
-                document.getElementById('oauth-step1').classList.add('hidden');
-                document.getElementById('oauth-step2').classList.add('hidden');
-                document.getElementById('connect-gmail-btn').disabled = false;
-                
+                clearInterval(oauthModalState.deviceInterval);
+                oauthModalState.deviceInterval = null;
+                oauthModalState.deviceCode = null;
+                document.getElementById('oauth-device-status').classList.add('hidden');
                 showToast(result.error || 'Device code expired. Please try again.', 'error');
             } else {
-                // Error
-                clearInterval(deviceFlowInterval);
-                deviceFlowInterval = null;
-                deviceCode = null;
-                
-                document.getElementById('oauth-step2').classList.add('hidden');
-                document.getElementById('connect-gmail-btn').disabled = false;
-                
+                clearInterval(oauthModalState.deviceInterval);
+                oauthModalState.deviceInterval = null;
+                document.getElementById('oauth-device-status').classList.add('hidden');
                 showToast(result.error || 'Authorization failed', 'error');
             }
         } catch (error) {
-            console.error('Error polling:', error);
-            document.getElementById('oauth-status-text').textContent = 'Error checking status...';
+            console.error('Error polling device flow:', error);
+            document.getElementById('oauth-device-status-text').textContent = 'Error checking status...';
         }
     };
     
-    // Poll immediately, then at intervals
     poll();
-    deviceFlowInterval = setInterval(poll, interval);
+    oauthModalState.deviceInterval = setInterval(poll, 5000);
 }
 
 
 async function handleSaveSMTP(e) {
     e.preventDefault();
     
+    // Hide previous errors
+    document.getElementById('config-errors').classList.add('hidden');
+    document.getElementById('config-errors-list').innerHTML = '';
+    
+    const authType = document.getElementById('auth-type').value;
+    if (!authType) {
+        showToast('Please select an authentication type', 'error');
+        return;
+    }
+    
     const config = {
+        authType: authType,
         smtpServer: document.getElementById('smtp-server').value,
         smtpPort: parseInt(document.getElementById('smtp-port').value),
         smtpEmail: document.getElementById('smtp-email').value,
-        smtpPassword: document.getElementById('smtp-password').value,
         recipientEmail: document.getElementById('recipient-email').value
     };
     
-    // Add OAuth2 fields if Gmail is selected
-    const smtpServer = config.smtpServer.toLowerCase();
-    const isGmail = smtpServer.includes('gmail.com') || smtpServer === 'smtp.gmail.com';
-    if (isGmail) {
-        const clientId = document.getElementById('google-client-id').value;
-        const clientSecret = document.getElementById('google-client-secret').value;
-        
-        if (clientId) config.googleClientId = clientId;
-        if (clientSecret) config.googleClientSecret = clientSecret;
-        // Refresh token is stored server-side via device flow, not from form
+    // Add auth type specific fields
+    if (authType === 'app_password') {
+        config.smtpPassword = document.getElementById('smtp-password').value;
+    } else if (authType === 'oauth2') {
+        config.googleClientId = document.getElementById('google-client-id').value;
+        config.googleClientSecret = document.getElementById('google-client-secret').value;
+        // Refresh token is stored server-side via OAuth flow
     }
     
     try {
@@ -1742,14 +1866,26 @@ async function handleSaveSMTP(e) {
         
         const result = await response.json();
         
-        if (response.ok) {
-            showToast(result.message || i18n?.t('smtpSaveSuccess') || 'SMTP settings saved successfully!', 'success');
+        if (response.ok && result.ok) {
+            showToast('SMTP settings saved successfully!', 'success');
+            loadConfig();
         } else {
-            showToast(result.error || i18n?.t('failedToSaveSMTP') || 'Failed to save SMTP settings', 'error');
+            // Show validation errors
+            if (result.details && result.details.length > 0) {
+                const errorsList = document.getElementById('config-errors-list');
+                result.details.forEach(detail => {
+                    const li = document.createElement('li');
+                    li.textContent = detail;
+                    errorsList.appendChild(li);
+                });
+                document.getElementById('config-errors').classList.remove('hidden');
+            }
+            const errorMsg = result.hint || result.error || 'Failed to save SMTP settings';
+            showToast(errorMsg, 'error');
         }
     } catch (error) {
         console.error('Error saving SMTP settings:', error);
-        showToast(i18n?.t('failedToSaveSMTP') || 'Failed to save SMTP settings', 'error');
+        showToast('Failed to save SMTP settings', 'error');
     }
 }
 
@@ -1785,14 +1921,15 @@ async function handleTestSMTP() {
         
         const result = await response.json();
         
-        if (response.ok) {
-            showToast(result.message || i18n?.t('testEmailSuccess') || 'Test email sent successfully!', 'success');
+        if (response.ok && result.ok) {
+            showToast('Test email sent successfully!', 'success');
         } else {
-            showToast(result.error || i18n?.t('failedToSendTestEmail') || 'Failed to send test email', 'error');
+            const errorMsg = result.hint || result.error || 'Failed to send test email';
+            showToast(errorMsg, 'error');
         }
     } catch (error) {
         console.error('Error testing SMTP:', error);
-        showToast(i18n?.t('failedToSendTestEmail') || 'Failed to send test email', 'error');
+        showToast('Failed to send test email', 'error');
     }
 }
 
@@ -2218,3 +2355,4 @@ async function handleSendDigest() {
         showToast(i18n?.t('failedToSendDigest') || 'Failed to send digest', 'error');
     }
 }
+

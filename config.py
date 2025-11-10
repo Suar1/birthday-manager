@@ -3,7 +3,7 @@ import json
 import os
 import base64
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -206,50 +206,69 @@ def save_smtp_settings(smtp_settings: Dict, portable: bool = False) -> None:
     save_config(config, portable)
 
 
-def validate_smtp_settings(settings: Dict) -> Tuple[bool, Optional[str]]:
-    """Validate SMTP settings. Returns (is_valid, error_message)."""
-    required_fields = ["smtpServer", "smtpPort", "smtpEmail", "recipientEmail"]
+def validate_smtp_settings(settings: Dict) -> Tuple[bool, Optional[str], List[str]]:
+    """
+    Validate SMTP settings with strict validation.
     
+    Returns:
+        Tuple of (is_valid, error_message, details_list)
+        details_list contains specific field validation errors
+    """
+    details = []
+    
+    # Validate authType
+    auth_type = settings.get("authType", "").lower()
+    if auth_type not in ["app_password", "oauth2"]:
+        details.append("authType must be 'app_password' or 'oauth2'")
+    
+    # Common required fields
+    required_fields = ["smtpServer", "smtpPort", "smtpEmail", "recipientEmail"]
     for field in required_fields:
         if not settings.get(field):
-            return False, f"Missing required field: {field}"
+            details.append(f"Missing required field: {field}")
     
-    # Validate port is a number
+    # Validate port
     try:
-        port = int(settings["smtpPort"])
+        port = int(settings.get("smtpPort", 0))
         if port < 1 or port > 65535:
-            return False, "SMTP port must be between 1 and 65535"
+            details.append("smtpPort must be between 1 and 65535")
+        elif port not in [587, 465] and settings.get("smtpServer", "").lower() in ["smtp.gmail.com", "gmail.com"]:
+            details.append("Gmail requires port 587 (STARTTLS) or 465 (SSL)")
     except (ValueError, TypeError):
-        return False, "SMTP port must be a valid number"
+        details.append("smtpPort must be a valid number")
     
-    # Basic email validation
+    # Validate email format
     email_fields = ["smtpEmail", "recipientEmail"]
     for field in email_fields:
-        email = settings[field]
-        if "@" not in email or "." not in email.split("@")[1]:
-            return False, f"Invalid email format for {field}"
+        email = settings.get(field, "")
+        if email and ("@" not in email or "." not in email.split("@")[1]):
+            details.append(f"Invalid email format for {field}")
     
-    # For Gmail, check if OAuth2 or password is provided
+    # Validate authType-specific fields
+    if auth_type == "app_password":
+        smtp_password = settings.get("smtpPassword", "")
+        if not smtp_password:
+            details.append("smtpPassword is required for app_password mode")
+        elif len(smtp_password.replace(" ", "")) < 12:
+            details.append("smtpPassword appears too short (App Passwords are 16 characters)")
+    elif auth_type == "oauth2":
+        if not settings.get("googleClientId"):
+            details.append("googleClientId is required for oauth2 mode")
+        if not settings.get("googleClientSecret"):
+            details.append("googleClientSecret is required for oauth2 mode")
+        # Check for encrypted or plain refresh token
+        has_refresh_token = bool(settings.get("googleRefreshToken") or settings.get("googleRefreshTokenEncrypted"))
+        if not has_refresh_token:
+            details.append("googleRefreshToken is required for oauth2 mode (connect Gmail first)")
+    
+    # Validate server for Gmail
     smtp_server = settings.get("smtpServer", "").lower()
     is_gmail = "gmail.com" in smtp_server or smtp_server == "smtp.gmail.com"
+    if is_gmail and not smtp_server:
+        details.append("For Gmail, use smtp.gmail.com")
     
-    if is_gmail:
-        # Gmail: require either OAuth2 credentials OR password
-        # Check for encrypted refresh token or plain text
-        has_refresh_token = bool(settings.get("googleRefreshToken") or settings.get("googleRefreshTokenEncrypted"))
-        has_oauth2 = all([
-            settings.get("googleClientId"),
-            settings.get("googleClientSecret"),
-            has_refresh_token
-        ])
-        has_password = bool(settings.get("smtpPassword"))
-        
-        if not has_oauth2 and not has_password:
-            return False, "Gmail requires either OAuth2 credentials (via Connect Gmail button) or App Password"
-    else:
-        # Non-Gmail: require password
-        if not settings.get("smtpPassword"):
-            return False, "SMTP password is required for non-Gmail servers"
+    if details:
+        return False, "INVALID_CONFIG", details
     
-    return True, None
+    return True, None, []
 

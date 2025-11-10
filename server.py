@@ -58,6 +58,15 @@ from config import (
     save_smtp_settings,
     validate_smtp_settings,
     reset_config as reset_config_file,
+    encrypt_refresh_token,
+    decrypt_refresh_token,
+)
+from mail_oauth import (
+    fetch_access_token,
+    build_xoauth2_string,
+    send_gmail_app_password,
+    send_gmail_oauth2,
+    map_smtp_error,
 )
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -181,21 +190,8 @@ def should_use_oauth2(settings: Dict) -> bool:
     Returns:
         True if OAuth2 should be used, False otherwise
     """
-    smtp_server = settings.get("smtpServer", "").lower()
-    is_gmail = "gmail.com" in smtp_server or smtp_server == "smtp.gmail.com"
-    
-    if not is_gmail:
-        return False
-    
-    # Check if OAuth2 credentials are present (refresh token can be encrypted or plain)
-    has_refresh_token = bool(settings.get("googleRefreshToken") or settings.get("googleRefreshTokenEncrypted"))
-    has_oauth2 = all([
-        settings.get("googleClientId"),
-        settings.get("googleClientSecret"),
-        has_refresh_token
-    ])
-    
-    return has_oauth2
+    auth_type = settings.get("authType", "").lower()
+    return auth_type == "oauth2"
 
 
 def send_email_with_auth(settings: Dict, msg) -> None:
@@ -258,14 +254,9 @@ def send_email_with_auth(settings: Dict, msg) -> None:
             logger.error(f"OAuth2 authentication failed: {sanitized_error}")
             raise
     else:
-        # Use password authentication
+        # Use App Password authentication
         smtp_password = settings["smtpPassword"]
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=20) as s:
-            s.ehlo()
-            s.starttls()
-            s.ehlo()
-            s.login(smtp_email, smtp_password)
-            s.send_message(msg)
+        send_gmail_app_password(smtp_server, smtp_port, smtp_email, smtp_password, msg)
 
 
 def get_smtp_error_message(error: Exception) -> Tuple[str, int]:
@@ -465,22 +456,34 @@ def api_get_config():
 
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
-    """Save SMTP configuration."""
+    """
+    Save SMTP configuration with strict validation.
+    Returns 400 for bad JSON, 422 for invalid config.
+    """
     try:
         portable = get_portable_mode()
-        data = request.get_json()
+        
+        # Check for valid JSON
+        try:
+            data = request.get_json()
+        except Exception:
+            return jsonify({"ok": False, "error": "BAD_JSON", "details": ["Invalid JSON in request body"]}), 400
         
         if not data:
-            return jsonify({"error": "No data provided"}), 400
+            return jsonify({"ok": False, "error": "BAD_JSON", "details": ["Request body is empty"]}), 400
         
-        is_valid, error_msg = validate_smtp_settings(data)
+        # Validate configuration
+        is_valid, error_code, details = validate_smtp_settings(data)
         if not is_valid:
-            return jsonify({"error": error_msg}), 400
+            return jsonify({"ok": False, "error": error_code, "details": details}), 422
         
+        # Save configuration
         save_smtp_settings(data, portable)
-        return jsonify({"message": "Configuration saved successfully!"})
+        return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        sanitized = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Error saving config: {sanitized}")
+        return jsonify({"ok": False, "error": "INTERNAL_ERROR"}), 500
 
 
 @app.route("/api/config/reset", methods=["POST"])
@@ -492,6 +495,295 @@ def api_reset_config():
         return jsonify({"message": "Configuration reset successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# In-memory storage for OAuth desktop flow (short-lived)
+oauth_desktop_codes = {}  # {code: {"state": str, "expires_at": float}}
+
+@app.route("/api/oauth/desktop/init", methods=["POST"])
+def api_oauth_desktop_init():
+    """
+    Initialize Desktop Loopback OAuth flow.
+    Returns the Google consent URL with redirect_uri=http://127.0.0.1:53682/
+    """
+    try:
+        portable = get_portable_mode()
+        settings = get_smtp_settings(portable)
+        
+        client_id = settings.get("googleClientId")
+        client_secret = settings.get("googleClientSecret")
+        
+        if not client_id or not client_secret:
+            return jsonify({"ok": False, "error": "CONFIG_NOT_SET", "hint": "Google Client ID and Secret must be configured first"}), 400
+        
+        import secrets
+        import time
+        
+        # Generate state for CSRF protection
+        state = secrets.token_urlsafe(32)
+        
+        # Build Google OAuth consent URL
+        # Note: redirect_uri must be registered in Google Cloud Console
+        # For loopback, we'll use a backend endpoint that can receive the redirect
+        # Since we can't easily run a server on 127.0.0.1:53682 from the browser,
+        # we'll use a backend endpoint that acts as the redirect handler
+        backend_redirect_uri = f"{request.host_url.rstrip('/')}/api/oauth/desktop/callback"
+        
+        auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={urllib.parse.quote(client_id)}&"
+            "response_type=code&"
+            "access_type=offline&"
+            "prompt=consent&"
+            f"scope={urllib.parse.quote('https://mail.google.com/')}&"
+            f"redirect_uri={urllib.parse.quote(backend_redirect_uri)}&"
+            f"state={urllib.parse.quote(state)}"
+        )
+        
+        # Store state temporarily (expires in 10 minutes)
+        oauth_desktop_codes[state] = {
+            "state": state,
+            "expires_at": time.time() + 600,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": backend_redirect_uri
+        }
+        
+        return jsonify({
+            "ok": True,
+            "auth_url": auth_url,
+            "redirect_uri": backend_redirect_uri,
+            "state": state
+        })
+    except Exception as e:
+        sanitized = re.sub(r'(client_id|client_secret)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Error initializing desktop OAuth: {sanitized}")
+        return jsonify({"ok": False, "error": "INTERNAL_ERROR"}), 500
+
+
+@app.route("/api/oauth/desktop/exchange", methods=["POST"])
+def api_oauth_desktop_exchange():
+    """
+    Exchange authorization code for refresh token (internal endpoint).
+    Called after receiving code from loopback redirect.
+    """
+    try:
+        data = request.get_json()
+        if not data or not data.get("code") or not data.get("state"):
+            return jsonify({"ok": False, "error": "BAD_JSON", "hint": "code and state are required"}), 400
+        
+        code = data["code"]
+        state = data["state"]
+        
+        # Verify state
+        if state not in oauth_desktop_codes:
+            return jsonify({"ok": False, "error": "INVALID_STATE", "hint": "State not found or expired"}), 400
+        
+        stored = oauth_desktop_codes[state]
+        import time
+        if time.time() > stored["expires_at"]:
+            del oauth_desktop_codes[state]
+            return jsonify({"ok": False, "error": "EXPIRED_STATE", "hint": "Authorization code expired"}), 400
+        
+        client_id = stored["client_id"]
+        client_secret = stored["client_secret"]
+        redirect_uri = "http://127.0.0.1:53682/"
+        
+        # Exchange code for tokens
+        token_url = "https://oauth2.googleapis.com/token"
+        exchange_data = urllib.parse.urlencode({
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code"
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(token_url, data=exchange_data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                
+                if "refresh_token" not in result:
+                    return jsonify({"ok": False, "error": "NO_REFRESH_TOKEN", "hint": "Google did not return a refresh token"}), 400
+                
+                # Store refresh token (encrypted) in config
+                portable = get_portable_mode()
+                settings = get_smtp_settings(portable)
+                settings["googleRefreshToken"] = result["refresh_token"]
+                settings["authType"] = "oauth2"  # Ensure authType is set
+                if not settings.get("googleClientId"):
+                    settings["googleClientId"] = client_id
+                if not settings.get("googleClientSecret"):
+                    settings["googleClientSecret"] = client_secret
+                save_smtp_settings(settings, portable)
+                
+                # Clean up
+                del oauth_desktop_codes[state]
+                
+                return jsonify({"ok": True})
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else "Unknown error"
+            try:
+                error_json = json.loads(error_body)
+                error_msg = error_json.get("error_description", error_json.get("error", "Unknown error"))
+            except:
+                error_msg = error_body
+            sanitized = re.sub(r'(client_id|client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', error_msg, flags=re.IGNORECASE)
+            logger.error(f"Token exchange failed: {sanitized}")
+            return jsonify({"ok": False, "error": "TOKEN_EXCHANGE_FAILED", "hint": error_msg}), 400
+    except Exception as e:
+        sanitized = re.sub(r'(client_id|client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Error exchanging token: {sanitized}")
+        return jsonify({"ok": False, "error": "INTERNAL_ERROR"}), 500
+
+
+@app.route("/api/oauth/desktop/callback", methods=["GET"])
+def api_oauth_desktop_callback():
+    """
+    Handle OAuth redirect from Google (loopback callback).
+    This endpoint receives the authorization code and exchanges it for tokens.
+    """
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
+    
+    if error:
+        return jsonify({"ok": False, "error": "OAUTH_ERROR", "hint": f"Authorization failed: {error}"}), 400
+    
+    if not code or not state:
+        return jsonify({"ok": False, "error": "BAD_REQUEST", "hint": "Missing code or state parameter"}), 400
+    
+    # Exchange code for tokens (reuse exchange logic)
+    try:
+        if state not in oauth_desktop_codes:
+            return jsonify({"ok": False, "error": "INVALID_STATE", "hint": "State not found or expired"}), 400
+        
+        stored = oauth_desktop_codes[state]
+        import time
+        if time.time() > stored["expires_at"]:
+            del oauth_desktop_codes[state]
+            return jsonify({"ok": False, "error": "EXPIRED_STATE", "hint": "Authorization code expired"}), 400
+        
+        client_id = stored["client_id"]
+        client_secret = stored["client_secret"]
+        redirect_uri = stored.get("redirect_uri", request.url_root.rstrip('/') + "/api/oauth/desktop/callback")
+        
+        # Exchange code for tokens
+        token_url = "https://oauth2.googleapis.com/token"
+        exchange_data = urllib.parse.urlencode({
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code"
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(token_url, data=exchange_data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                
+                if "refresh_token" not in result:
+                    return jsonify({"ok": False, "error": "NO_REFRESH_TOKEN", "hint": "Google did not return a refresh token"}), 400
+                
+                # Store refresh token (encrypted) in config
+                portable = get_portable_mode()
+                settings = get_smtp_settings(portable)
+                settings["googleRefreshToken"] = result["refresh_token"]
+                settings["authType"] = "oauth2"
+                if not settings.get("googleClientId"):
+                    settings["googleClientId"] = client_id
+                if not settings.get("googleClientSecret"):
+                    settings["googleClientSecret"] = client_secret
+                save_smtp_settings(settings, portable)
+                
+                # Mark as completed
+                oauth_desktop_codes[state]["completed"] = True
+                oauth_desktop_codes[state]["refresh_token_stored"] = True
+                
+                # Return success page
+                return """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Authorization Successful</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                        .success { color: green; font-size: 24px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="success">✓ Authorization Successful!</div>
+                    <p>You can close this window.</p>
+                </body>
+                </html>
+                """, 200
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else "Unknown error"
+            try:
+                error_json = json.loads(error_body)
+                error_msg = error_json.get("error_description", error_json.get("error", "Unknown error"))
+            except:
+                error_msg = error_body
+            return f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Authorization Failed</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                    .error { color: red; font-size: 24px; }
+                </style>
+            </head>
+            <body>
+                <div class="error">✗ Authorization Failed</div>
+                <p>{error_msg}</p>
+            </body>
+            </html>
+            """, 400
+    except Exception as e:
+        sanitized = re.sub(r'(client_id|client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Error in callback: {sanitized}")
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error</title>
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                .error { color: red; }
+            </style>
+        </head>
+        <body>
+            <div class="error">An error occurred during authorization.</div>
+        </body>
+        </html>
+        """, 500
+
+
+@app.route("/api/oauth/desktop/status", methods=["GET"])
+def api_oauth_desktop_status():
+    """
+    Check status of desktop OAuth flow (polled by frontend).
+    Returns pending/success/error based on state.
+    """
+    state = request.args.get("state")
+    if not state:
+        return jsonify({"ok": False, "error": "BAD_REQUEST", "hint": "state parameter required"}), 400
+    
+    if state not in oauth_desktop_codes:
+        return jsonify({"ok": False, "status": "expired", "hint": "State expired or not found"}), 400
+    
+    stored = oauth_desktop_codes[state]
+    if stored.get("completed") and stored.get("refresh_token_stored"):
+        return jsonify({"ok": True, "status": "success"})
+    
+    return jsonify({"ok": True, "status": "pending"})
 
 
 @app.route("/api/oauth/device/init", methods=["POST"])
@@ -507,7 +799,9 @@ def api_oauth_device_init():
         
         if not client_id or not client_secret:
             return jsonify({
-                "error": "Google Client ID and Secret must be configured first. Please enter them in SMTP Settings."
+                "ok": False,
+                "error": "CONFIG_NOT_SET",
+                "hint": "Google Client ID and Secret must be configured first. Please enter them in SMTP Settings."
             }), 400
         
         # Call Google device code endpoint
@@ -526,13 +820,13 @@ def api_oauth_device_init():
                 
                 if "device_code" not in result or "user_code" not in result:
                     return jsonify({
-                        "error": f"Failed to initialize device flow: {result.get('error', 'Unknown error')}"
+                        "ok": False,
+                        "error": "DEVICE_FLOW_INIT_FAILED",
+                        "hint": f"Failed to initialize device flow: {result.get('error', 'Unknown error')}"
                     }), 500
                 
-                # Store device_code temporarily (in-memory, expires after interval)
-                # In production, you might want to use Redis or similar
-                # For now, return it to client to poll with
                 return jsonify({
+                    "ok": True,
                     "device_code": result["device_code"],
                     "user_code": result["user_code"],
                     "verification_url": result.get("verification_url", "https://www.google.com/device"),
@@ -607,10 +901,12 @@ def api_oauth_device_poll():
                 # Store refresh token (encrypted) and update settings
                 refresh_token = result["refresh_token"]
                 settings["googleRefreshToken"] = refresh_token
+                settings["authType"] = "oauth2"  # Ensure authType is set
                 save_smtp_settings(settings, portable)
                 
                 # Never return the refresh token to client
                 return jsonify({
+                    "ok": True,
                     "status": "success",
                     "message": "Gmail OAuth2 connected successfully!"
                 })
@@ -635,13 +931,21 @@ def api_oauth_device_poll():
 
 @app.route("/api/test-email", methods=["POST"])
 def api_test_email():
-    """Send a test email using SMTP settings (OAuth2 or password auth)."""
+    """
+    Send a test email using SMTP settings.
+    Uses App Password or OAuth2 based on authType.
+    Returns 401 for auth failures, 502 for other errors.
+    """
     try:
         portable = get_portable_mode()
         settings = get_smtp_settings(portable)
         
         if not settings:
-            return jsonify({"error": "SMTP settings are not configured"}), 400
+            return jsonify({"ok": False, "error": "CONFIG_NOT_SET"}), 400
+        
+        auth_type = settings.get("authType", "").lower()
+        if not auth_type:
+            return jsonify({"ok": False, "error": "CONFIG_NOT_SET", "hint": "authType not configured"}), 400
         
         # Create email using EmailMessage
         msg = EmailMessage()
@@ -650,25 +954,44 @@ def api_test_email():
         msg["To"] = settings["recipientEmail"]
         msg.set_content("SMTP is working. 🎉")
         
-        # Send email using appropriate authentication method
-        send_email_with_auth(settings, msg)
+        # Send email based on auth type
+        try:
+            if auth_type == "app_password":
+                send_gmail_app_password(
+                    settings["smtpServer"],
+                    int(settings["smtpPort"]),
+                    settings["smtpEmail"],
+                    settings["smtpPassword"],
+                    msg
+                )
+            elif auth_type == "oauth2":
+                # Get access token from refresh token
+                access_token = fetch_access_token(
+                    settings["googleClientId"],
+                    settings["googleClientSecret"],
+                    settings["googleRefreshToken"]
+                )
+                send_gmail_oauth2(
+                    settings["smtpServer"],
+                    int(settings["smtpPort"]),
+                    settings["smtpEmail"],
+                    access_token,
+                    msg
+                )
+            else:
+                return jsonify({"ok": False, "error": "INVALID_AUTH_TYPE", "hint": f"Unknown authType: {auth_type}"}), 400
+        except Exception as e:
+            # Map SMTP errors to proper HTTP status codes
+            error_code, http_status, hint = map_smtp_error(e)
+            sanitized = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+            logger.error(f"SMTP error sending test email: {sanitized}")
+            return jsonify({"ok": False, "error": error_code, "hint": hint}), http_status
         
-        return jsonify({"message": "Test email sent successfully!"})
-    except smtplib.SMTPException as e:
-        error_msg, status_code = get_smtp_error_message(e)
-        # Never log secrets - sanitize error message
-        sanitized_error = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
-        logger.error(f"SMTP error sending test email: {sanitized_error}")
-        return jsonify({"error": error_msg}), status_code
+        return jsonify({"ok": True})
     except Exception as e:
-        # Check if it's an OAuth2 token fetch error
-        error_str = str(e)
-        if "access token" in error_str.lower() or "oauth" in error_str.lower():
-            sanitized_error = re.sub(r'(client_secret|refresh_token|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', error_str, flags=re.IGNORECASE)
-            logger.error(f"OAuth2 error sending test email: {sanitized_error}")
-            return jsonify({"error": "OAuth2 authentication failed. Check your Client ID, Secret, and Refresh Token."}), 401
-        logger.error(f"Error sending test email: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        sanitized = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+        logger.error(f"Unexpected error sending test email: {sanitized}")
+        return jsonify({"ok": False, "error": "INTERNAL_ERROR"}), 502
 
 
 @app.route("/api/test-reminder", methods=["POST"])
