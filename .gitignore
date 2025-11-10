@@ -49,3 +49,14 @@ Thumbs.db
 node_modules/
 package-lock.json
 
+# Logs
+logs/
+*.log
+
+# Debug artifacts
+debug/
+!debug/.gitkeep
+
+# Scripts output (if any)
+scripts/output/
+

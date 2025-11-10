@@ -14,7 +14,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 from email.message import EmailMessage
-import logging
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -22,23 +21,9 @@ import json
 import base64
 from typing import Dict, Tuple
 
-# Configure logging - sanitize sensitive data
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Custom formatter to sanitize logs
-class SanitizedFormatter(logging.Formatter):
-    def format(self, record):
-        # Remove potential password/sensitive data from logs
-        msg = super().format(record)
-        # Replace common password patterns
-        msg = re.sub(r'(password|passwd|pwd)\s*[:=]\s*\S+', r'\1: [REDACTED]', msg, flags=re.IGNORECASE)
-        msg = re.sub(r'smtpPassword["\']?\s*[:=]\s*["\']?[^"\']+', 'smtpPassword: [REDACTED]', msg, flags=re.IGNORECASE)
-        return msg
-
-handler = logging.StreamHandler()
-handler.setFormatter(SanitizedFormatter())
-logger.addHandler(handler)
+# Configure logging with file rotation and console toggle
+from logger import setup_logger
+logger = setup_logger(__name__)
 
 from core import (
     get_db_path,

@@ -116,6 +116,73 @@ Configure SMTP settings through the web interface. Required fields:
 - `POST /api/import` - Import birthdays from a ZIP file (requires multipart/form-data with 'file' field and optional 'replace' boolean)
 - `GET /health` - Health check endpoint
 
+## Repository Structure
+
+```
+.
+├── core.py              # Core business logic (database operations, age calculation, email generation)
+├── config.py            # Configuration management (JSON-based config storage)
+├── server.py             # Flask application and API routes
+├── mail_oauth.py         # Gmail OAuth2 and App Password email utilities
+├── logger.py             # Centralized logging with file rotation
+├── static/               # Frontend assets
+│   ├── index.html        # Main HTML with Tailwind CSS
+│   ├── app.js            # Frontend JavaScript logic
+│   ├── style.css         # Custom styles
+│   ├── i18n.js           # Internationalization
+│   └── sw.js             # Service worker for PWA
+├── data/                 # User data (database, config) - gitignored
+├── logs/                 # Application logs - gitignored
+├── debug/                # Debug artifacts and test files
+├── scripts/              # Build/test/release scripts
+├── tests/                # Test files
+└── uploads/              # User-uploaded images - gitignored
+```
+
+## Logging
+
+The application uses a centralized logging system with file rotation and optional console output.
+
+### Log Files
+
+- **Location**: `logs/app.log` (default, configurable via `LOG_DIR`)
+- **Rotation**: Automatically rotates when file reaches max size (default 10MB)
+- **Backups**: Keeps 5 backup files by default
+- **Format**: Timestamp, logger name, level, and message
+
+### Environment Variables
+
+Configure logging behavior via environment variables:
+
+- `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: `INFO`
+- `LOG_TO_CONSOLE` - Enable console output (true/false). Default: `false`
+- `LOG_DIR` - Directory for log files. Default: `./logs`
+- `LOG_MAX_SIZE` - Maximum log file size in bytes. Default: `10485760` (10MB)
+- `LOG_MAX_FILES` - Number of backup files to keep. Default: `5`
+
+### Examples
+
+```bash
+# Enable console logging
+export LOG_TO_CONSOLE=true
+python3 server.py
+
+# Set debug level and custom log directory
+export LOG_LEVEL=DEBUG
+export LOG_DIR=/var/log/birthday-manager
+python3 server.py
+
+# All at once
+LOG_LEVEL=DEBUG LOG_TO_CONSOLE=true python3 server.py
+```
+
+### Security
+
+Logs automatically sanitize sensitive information:
+- Passwords and tokens are redacted
+- SMTP credentials are masked
+- OAuth2 secrets are hidden
+
 ## Architecture
 
 The application follows a clean architecture:
@@ -123,6 +190,8 @@ The application follows a clean architecture:
 - `core.py` - Core business logic (database operations, age calculation, email generation)
 - `config.py` - Configuration management (JSON-based config storage)
 - `server.py` - Flask application and API routes
+- `mail_oauth.py` - Gmail OAuth2 and App Password email sending utilities
+- `logger.py` - Centralized logging with file rotation and sanitization
 - `static/index.html` - Frontend HTML with Tailwind CSS
 - `static/app.js` - Frontend JavaScript logic
 - `static/style.css` - Minimal custom styles
