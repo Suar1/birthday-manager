@@ -5,6 +5,8 @@ import csv
 import io
 import re
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response
@@ -1503,23 +1505,92 @@ def health():
     return jsonify({"status": "ok"})
 
 
+def run_daily_reminder(portable: bool) -> None:
+    """Background thread: send birthday reminder emails every day at 09:00."""
+    logger.info("Daily reminder scheduler started")
+    while True:
+        try:
+            now = datetime.now()
+            # Calculate seconds until next 09:00
+            next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if now >= next_run:
+                next_run += timedelta(days=1)
+            sleep_seconds = (next_run - now).total_seconds()
+            logger.info(f"Next birthday check scheduled at {next_run.strftime('%Y-%m-%d %H:%M:%S')} (in {sleep_seconds:.0f}s)")
+            time.sleep(sleep_seconds)
+
+            # Send reminders for today's birthdays
+            try:
+                db_path = get_db_path(portable)
+                settings = get_smtp_settings(portable)
+                if not settings or not settings.get("smtpServer"):
+                    logger.warning("Auto-reminder: SMTP not configured, skipping")
+                    continue
+
+                birthdays = get_todays_birthdays(db_path)
+                if not birthdays:
+                    logger.info("Auto-reminder: no birthdays today")
+                    continue
+
+                sent_count = 0
+                for birthday in birthdays:
+                    try:
+                        subject, html_body = generate_email_content(birthday)
+                        msg = MIMEMultipart()
+                        msg["From"] = settings["smtpEmail"]
+                        msg["To"] = settings["recipientEmail"]
+                        msg["Subject"] = subject
+                        msg.attach(MIMEText(html_body, "html"))
+
+                        if birthday.get("photo"):
+                            photo_path = Path(__file__).parent / birthday["photo"].lstrip("/")
+                            if photo_path.exists():
+                                with open(photo_path, "rb") as f:
+                                    img = MIMEImage(f.read())
+                                    img.add_header("Content-ID", f"<photo_{birthday['id']}>")
+                                    msg.attach(img)
+
+                        send_email_with_auth(settings, msg)
+                        sent_count += 1
+                        logger.info(f"Auto-reminder sent for {birthday['name']}")
+                    except Exception as e:
+                        sanitized = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
+                        logger.error(f"Auto-reminder failed for {birthday.get('name', 'unknown')}: {sanitized}")
+
+                logger.info(f"Auto-reminder: sent {sent_count}/{len(birthdays)} email(s)")
+            except Exception as e:
+                logger.error(f"Auto-reminder error: {e}")
+        except Exception as e:
+            logger.error(f"Scheduler error: {e}")
+            time.sleep(60)  # retry after a minute on unexpected error
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Birthday Reminder Flask Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--port", type=int, default=5000, help="Port to bind to")
     parser.add_argument("--portable", action="store_true", help="Use portable mode (local config)")
-    
+
     args = parser.parse_args()
-    
+
     if args.portable:
         os.environ["BIRTHDAY_REMINDER_PORTABLE"] = "true"
-    
+
     # Initialize database
     portable = get_portable_mode()
     db_path = get_db_path(portable)
     init_database(db_path)
-    
+
+    # Start background scheduler for daily 09:00 reminders
+    scheduler_thread = threading.Thread(
+        target=run_daily_reminder,
+        args=(portable,),
+        daemon=True,
+        name="daily-reminder-scheduler"
+    )
+    scheduler_thread.start()
+
     # Run Flask app - single process, no reloader, no threads
     app.run(
         host=args.host,
