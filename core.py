@@ -60,7 +60,7 @@ def get_todays_birthdays(db_path: Path) -> List[Dict]:
     """Get all birthdays that occur today."""
     today = datetime.now()
     formatted_today = today.strftime("%m-%d")
-    
+
     birthdays = []
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -72,7 +72,27 @@ def get_todays_birthdays(db_path: Path) -> List[Dict]:
             birthday_dict = dict(row)
             birthday_dict["age"] = calculate_age(birthday_dict["birthday"])
             birthdays.append(birthday_dict)
-    
+
+    return birthdays
+
+
+def get_birthdays_on_date(db_path: Path, date) -> List[Dict]:
+    """Get all birthdays that occur on a given date (matches month and day)."""
+    from datetime import date as date_type
+    formatted_date = date.strftime("%m-%d")
+
+    birthdays = []
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT * FROM birthdays WHERE strftime('%m-%d', birthday) = ?",
+            (formatted_date,)
+        )
+        for row in cursor.fetchall():
+            birthday_dict = dict(row)
+            birthday_dict["age"] = calculate_age(birthday_dict["birthday"])
+            birthdays.append(birthday_dict)
+
     return birthdays
 
 

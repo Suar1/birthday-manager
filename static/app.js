@@ -67,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initDarkMode();
     initI18n();
     loadConfig();
+    loadReminders();
     fetchBirthdays();
     setupEventListeners();
     setupModalDrag();
@@ -221,7 +222,16 @@ function setupEventListeners() {
         form.classList.toggle('hidden');
         icon.classList.toggle('rotate-180');
     });
-    
+
+    document.getElementById('reminders-toggle')?.addEventListener('click', () => {
+        const form = document.getElementById('reminders-form');
+        const icon = document.querySelector('#reminders-toggle svg');
+        form.classList.toggle('hidden');
+        icon.classList.toggle('rotate-180');
+    });
+
+    document.getElementById('save-reminders-btn')?.addEventListener('click', handleSaveReminders);
+
     // Shortcuts modal
     document.getElementById('shortcuts-btn')?.addEventListener('click', () => {
         document.getElementById('shortcuts-modal').classList.remove('hidden');
@@ -2342,9 +2352,9 @@ async function handleSendDigest() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ days })
         });
-        
+
         const result = await response.json();
-        
+
         if (response.ok) {
             showToast(result.message || i18n?.t('digestSendSuccess') || 'Digest sent successfully!', 'success');
         } else {
@@ -2353,6 +2363,68 @@ async function handleSendDigest() {
     } catch (error) {
         console.error('Error sending digest:', error);
         showToast(i18n?.t('failedToSendDigest') || 'Failed to send digest', 'error');
+    }
+}
+
+// ============================================================================
+// REMINDER SCHEDULE
+// ============================================================================
+
+async function loadReminders() {
+    try {
+        const response = await fetch(`${API_BASE}/api/reminders`);
+        if (!response.ok) return;
+        const reminders = await response.json();
+
+        // Populate reminder 1 (index 0)
+        const r1 = reminders[0];
+        if (r1) {
+            document.getElementById('reminder1-enabled').checked = !!r1.enabled;
+            document.getElementById('reminder1-offset').value = String(r1.daysOffset ?? 0);
+            document.getElementById('reminder1-time').value = r1.time || '09:00';
+        }
+
+        // Populate reminder 2 (index 1)
+        const r2 = reminders[1];
+        if (r2) {
+            document.getElementById('reminder2-enabled').checked = !!r2.enabled;
+            document.getElementById('reminder2-offset').value = String(r2.daysOffset ?? 1);
+            document.getElementById('reminder2-time').value = r2.time || '18:00';
+        }
+    } catch (error) {
+        console.error('Error loading reminders:', error);
+    }
+}
+
+async function handleSaveReminders() {
+    const reminders = [
+        {
+            daysOffset: parseInt(document.getElementById('reminder1-offset').value),
+            time: document.getElementById('reminder1-time').value,
+            enabled: document.getElementById('reminder1-enabled').checked,
+        },
+        {
+            daysOffset: parseInt(document.getElementById('reminder2-offset').value),
+            time: document.getElementById('reminder2-time').value,
+            enabled: document.getElementById('reminder2-enabled').checked,
+        },
+    ];
+
+    try {
+        const response = await fetch(`${API_BASE}/api/reminders`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(reminders),
+        });
+        const result = await response.json();
+        if (response.ok) {
+            showToast('Reminder schedule saved!', 'success');
+        } else {
+            showToast(result.error || 'Failed to save reminder schedule', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving reminders:', error);
+        showToast('Failed to save reminder schedule', 'error');
     }
 }
 

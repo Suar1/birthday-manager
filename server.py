@@ -31,6 +31,7 @@ from core import (
     get_db_path,
     init_database,
     get_todays_birthdays,
+    get_birthdays_on_date,
     get_all_birthdays,
     add_birthday,
     update_birthday,
@@ -41,6 +42,8 @@ from core import (
     import_birthdays,
 )
 from config import (
+    load_config,
+    save_config,
     get_smtp_settings,
     save_smtp_settings,
     validate_smtp_settings,
@@ -1499,43 +1502,109 @@ def serve_sw():
     return send_from_directory("static", "sw.js", mimetype="application/javascript")
 
 
+DEFAULT_REMINDERS = [{"daysOffset": 0, "time": "09:00", "enabled": True}]
+
+
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint."""
     return jsonify({"status": "ok"})
 
 
-def run_daily_reminder(portable: bool) -> None:
-    """Background thread: send birthday reminder emails every day at 09:00."""
-    logger.info("Daily reminder scheduler started")
+@app.route("/api/reminders", methods=["GET"])
+def get_reminders():
+    """Return the current reminder schedule."""
+    portable = get_portable_mode()
+    config = load_config(portable)
+    reminders = config.get("reminders", DEFAULT_REMINDERS)
+    return jsonify(reminders)
+
+
+@app.route("/api/reminders", methods=["POST"])
+def save_reminders():
+    """Save reminder schedule to config."""
+    portable = get_portable_mode()
+    data = request.get_json()
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected a JSON array of reminders"}), 400
+
+    # Basic validation
+    for item in data:
+        if not isinstance(item, dict):
+            return jsonify({"error": "Each reminder must be an object"}), 400
+        if "daysOffset" not in item or "time" not in item or "enabled" not in item:
+            return jsonify({"error": "Each reminder needs daysOffset, time, and enabled"}), 400
+        if item["daysOffset"] not in (0, 1, 7, 14):
+            return jsonify({"error": f"Invalid daysOffset: {item['daysOffset']}"}), 400
+        try:
+            h, m = map(int, item["time"].split(":"))
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                raise ValueError
+        except (ValueError, AttributeError):
+            return jsonify({"error": f"Invalid time format: {item['time']}"}), 400
+
+    config = load_config(portable)
+    config["reminders"] = data
+    save_config(config, portable)
+    return jsonify({"ok": True})
+
+
+def run_reminder_scheduler(portable: bool) -> None:
+    """Background thread: check every 30s and send reminders per config."""
+    logger.info("Reminder scheduler started")
+    sent_today: set = set()  # (today_str, birthday_id, days_offset)
+    last_day: str = None
+
     while True:
         try:
+            time.sleep(30)
             now = datetime.now()
-            # Calculate seconds until next 09:00
-            next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
-            if now >= next_run:
-                next_run += timedelta(days=1)
-            sleep_seconds = (next_run - now).total_seconds()
-            logger.info(f"Next birthday check scheduled at {next_run.strftime('%Y-%m-%d %H:%M:%S')} (in {sleep_seconds:.0f}s)")
-            time.sleep(sleep_seconds)
+            today_str = now.strftime("%Y-%m-%d")
 
-            # Send reminders for today's birthdays
-            try:
-                db_path = get_db_path(portable)
-                settings = get_smtp_settings(portable)
-                if not settings or not settings.get("smtpServer"):
-                    logger.warning("Auto-reminder: SMTP not configured, skipping")
+            # Clear sent set at midnight (new day)
+            if last_day != today_str:
+                sent_today.clear()
+                last_day = today_str
+
+            config = load_config(portable)
+            reminders = config.get("reminders", DEFAULT_REMINDERS)
+            settings = get_smtp_settings(portable)
+            if not settings or not settings.get("smtpServer"):
+                continue
+
+            db_path = get_db_path(portable)
+
+            for reminder in reminders:
+                if not reminder.get("enabled"):
                     continue
 
-                birthdays = get_todays_birthdays(db_path)
-                if not birthdays:
-                    logger.info("Auto-reminder: no birthdays today")
+                # Check if current time matches the reminder time (HH:MM)
+                try:
+                    h, m = map(int, reminder["time"].split(":"))
+                except (KeyError, ValueError):
+                    continue
+                if now.hour != h or now.minute != m:
                     continue
 
-                sent_count = 0
+                days_offset = reminder.get("daysOffset", 0)
+                target_date = (now + timedelta(days=days_offset)).date()
+                birthdays = get_birthdays_on_date(db_path, target_date)
+
                 for birthday in birthdays:
+                    key = (today_str, birthday["id"], days_offset)
+                    if key in sent_today:
+                        continue
+
                     try:
-                        subject, html_body = generate_email_content(birthday)
+                        _, html_body = generate_email_content(birthday)
+                        name = birthday["name"]
+                        if days_offset == 0:
+                            subject = f"Birthday Reminder: {name}"
+                        elif days_offset == 1:
+                            subject = f"Birthday Tomorrow: {name}"
+                        else:
+                            subject = f"Birthday in {days_offset} days: {name}"
+
                         msg = MIMEMultipart()
                         msg["From"] = settings["smtpEmail"]
                         msg["To"] = settings["recipientEmail"]
@@ -1551,18 +1620,15 @@ def run_daily_reminder(portable: bool) -> None:
                                     msg.attach(img)
 
                         send_email_with_auth(settings, msg)
-                        sent_count += 1
-                        logger.info(f"Auto-reminder sent for {birthday['name']}")
+                        sent_today.add(key)
+                        logger.info(f"Auto-reminder sent for {name} (offset={days_offset}d)")
                     except Exception as e:
                         sanitized = re.sub(r'(client_secret|refresh_token|password|token)\s*[:=]\s*\S+', r'\1: [REDACTED]', str(e), flags=re.IGNORECASE)
                         logger.error(f"Auto-reminder failed for {birthday.get('name', 'unknown')}: {sanitized}")
 
-                logger.info(f"Auto-reminder: sent {sent_count}/{len(birthdays)} email(s)")
-            except Exception as e:
-                logger.error(f"Auto-reminder error: {e}")
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
-            time.sleep(60)  # retry after a minute on unexpected error
+            time.sleep(60)
 
 
 def main():
@@ -1582,12 +1648,12 @@ def main():
     db_path = get_db_path(portable)
     init_database(db_path)
 
-    # Start background scheduler for daily 09:00 reminders
+    # Start background scheduler for configurable reminders
     scheduler_thread = threading.Thread(
-        target=run_daily_reminder,
+        target=run_reminder_scheduler,
         args=(portable,),
         daemon=True,
-        name="daily-reminder-scheduler"
+        name="reminder-scheduler"
     )
     scheduler_thread.start()
 
