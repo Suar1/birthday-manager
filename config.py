@@ -51,28 +51,43 @@ def get_encryption_key(portable: bool = False) -> bytes:
         return key
 
 
-def encrypt_refresh_token(token: str, portable: bool = False) -> str:
-    """Encrypt OAuth2 refresh token for storage."""
+SECRET_PREFIX = "enc:v1:"
+
+
+def encrypt_secret(value: str, portable: bool = False) -> str:
+    """Encrypt a restorable secret for storage."""
     try:
         key = get_encryption_key(portable)
         f = Fernet(key)
-        encrypted = f.encrypt(token.encode())
-        return base64.urlsafe_b64encode(encrypted).decode()
+        encrypted = f.encrypt(value.encode())
+        return SECRET_PREFIX + base64.urlsafe_b64encode(encrypted).decode()
     except Exception:
-        # Fallback: return as-is if encryption fails (shouldn't happen)
-        return token
+        raise
 
 
-def decrypt_refresh_token(encrypted_token: str, portable: bool = False) -> Optional[str]:
-    """Decrypt OAuth2 refresh token from storage."""
+def decrypt_secret(encrypted_value: str, portable: bool = False) -> Optional[str]:
+    """Decrypt a restorable secret from storage."""
     try:
+        value = encrypted_value
+        if value.startswith(SECRET_PREFIX):
+            value = value[len(SECRET_PREFIX):]
         key = get_encryption_key(portable)
         f = Fernet(key)
-        encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode())
+        encrypted_bytes = base64.urlsafe_b64decode(value.encode())
         decrypted = f.decrypt(encrypted_bytes)
         return decrypted.decode()
     except Exception:
         return None
+
+
+def encrypt_refresh_token(token: str, portable: bool = False) -> str:
+    """Encrypt OAuth2 refresh token for storage."""
+    return encrypt_secret(token, portable)
+
+
+def decrypt_refresh_token(encrypted_token: str, portable: bool = False) -> Optional[str]:
+    """Decrypt OAuth2 refresh token from storage."""
+    return decrypt_secret(encrypted_token, portable)
 
 
 def load_config(portable: bool = False) -> Dict:
@@ -165,41 +180,55 @@ def get_smtp_settings(portable: bool = False) -> Dict:
     """Get SMTP settings from config, with fallback to old format."""
     # First try new format
     config = load_config(portable)
-    smtp_settings = config.get("smtp", {})
+    smtp_settings = config.get("smtp", {}).copy()
+    migrated_plaintext_secret = False
     
-    # Decrypt refresh token if present
-    if smtp_settings.get("googleRefreshTokenEncrypted"):
-        decrypted = decrypt_refresh_token(smtp_settings["googleRefreshTokenEncrypted"], portable)
-        if decrypted:
-            smtp_settings["googleRefreshToken"] = decrypted
-            # Don't expose encrypted version in returned dict
-            smtp_settings.pop("googleRefreshTokenEncrypted", None)
+    encrypted_secret_fields = {
+        "smtpPasswordEncrypted": "smtpPassword",
+        "googleClientSecretEncrypted": "googleClientSecret",
+        "googleRefreshTokenEncrypted": "googleRefreshToken",
+    }
     
-    # If no settings found, try old format
-    if not smtp_settings or not smtp_settings.get("smtpPassword"):
+    for encrypted_field, plain_field in encrypted_secret_fields.items():
+        if smtp_settings.get(encrypted_field):
+            decrypted = decrypt_secret(smtp_settings[encrypted_field], portable)
+            if decrypted:
+                smtp_settings[plain_field] = decrypted
+                smtp_settings.pop(encrypted_field, None)
+    
+    for plain_field in ["smtpPassword", "googleClientSecret", "googleRefreshToken"]:
+        if plain_field in config.get("smtp", {}) and config["smtp"].get(plain_field):
+            migrated_plaintext_secret = True
+    
+    # If no settings found, try old format. OAuth2 configs intentionally do not
+    # have smtpPassword, so absence of that field must not trigger legacy import.
+    if not smtp_settings:
         old_settings = get_old_smtp_settings(portable)
         if old_settings:
             # Migrate old settings to new format
             save_smtp_settings(old_settings, portable)
             return old_settings
     
+    if migrated_plaintext_secret:
+        save_smtp_settings(smtp_settings, portable)
+    
     return smtp_settings
 
 
 def save_smtp_settings(smtp_settings: Dict, portable: bool = False) -> None:
-    """Save SMTP settings to config. Encrypts refresh token if present."""
+    """Save SMTP settings to config. Encrypts restorable secrets before writing."""
     # Create a copy to avoid modifying the original
     settings_to_save = smtp_settings.copy()
     
-    # Encrypt refresh token if present (plain text)
-    if "googleRefreshToken" in settings_to_save and settings_to_save["googleRefreshToken"]:
-        encrypted = encrypt_refresh_token(settings_to_save["googleRefreshToken"], portable)
-        settings_to_save["googleRefreshTokenEncrypted"] = encrypted
-        # Remove plain text version
-        settings_to_save.pop("googleRefreshToken", None)
-    
-    # Note: We keep googleClientSecret in config (needed for token refresh)
-    # but it's never returned by API endpoints
+    secret_fields = {
+        "smtpPassword": "smtpPasswordEncrypted",
+        "googleClientSecret": "googleClientSecretEncrypted",
+        "googleRefreshToken": "googleRefreshTokenEncrypted",
+    }
+    for plain_field, encrypted_field in secret_fields.items():
+        if settings_to_save.get(plain_field):
+            settings_to_save[encrypted_field] = encrypt_secret(settings_to_save[plain_field], portable)
+        settings_to_save.pop(plain_field, None)
     
     config = load_config(portable)
     config["smtp"] = settings_to_save
@@ -271,4 +300,3 @@ def validate_smtp_settings(settings: Dict) -> Tuple[bool, Optional[str], List[st
         return False, "INVALID_CONFIG", details
     
     return True, None, []
-

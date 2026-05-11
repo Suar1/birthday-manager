@@ -14,6 +14,8 @@ services:
     environment:
       - BIRTHDAY_REMINDER_PORTABLE=true
       - PYTHONUNBUFFERED=1
+      - BIRTHDAY_REMINDER_ADMIN_TOKEN=${BIRTHDAY_REMINDER_ADMIN_TOKEN}
+      - BACKUP_SECRET_KEY=${BACKUP_SECRET_KEY}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4040/health')"]
@@ -21,4 +23,5 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
-
+#    env_file:
+#      - .env

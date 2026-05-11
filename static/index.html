@@ -246,6 +246,23 @@
                             class="w-full bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-xl transition-colors text-sm">
                             Preview CSV Import
                         </button>
+                        <div class="pt-3 mt-3 border-t border-gray-200 dark:border-gray-700 space-y-2">
+                            <button id="secure-backup-btn"
+                                class="w-full bg-gradient-to-r from-slate-700 to-cyan-700 hover:from-slate-800 hover:to-cyan-800 text-white font-semibold py-2 px-4 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2 text-sm">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c1.657 0 3-1.343 3-3V6a3 3 0 00-6 0v2c0 1.657 1.343 3 3 3zm-6 0h12v10H6V11z"></path></svg>
+                                Create Backup
+                            </button>
+                            <button id="secure-restore-btn"
+                                class="w-full bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 text-white font-semibold py-2 px-4 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-2 text-sm">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                                Restore Backup
+                            </button>
+                            <p class="text-xs text-gray-600 dark:text-gray-400">
+                                Passwords and secrets are encrypted inside the backup.
+                            </p>
+                            <div id="secure-backup-status" class="hidden text-sm rounded-xl px-3 py-2 bg-gray-100 dark:bg-gray-900/50 text-gray-700 dark:text-gray-300"></div>
+                            <div id="secure-backup-metadata" class="hidden text-xs rounded-xl px-3 py-2 bg-cyan-50 dark:bg-cyan-900/20 text-gray-700 dark:text-gray-300 space-y-1"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -639,6 +656,86 @@
                     Import
                 </button>
                 <button id="cancel-csv-import" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-xl">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Secure Backup Modal -->
+    <div id="secure-backup-modal" class="hidden fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm overflow-y-auto h-full w-full z-50">
+        <div class="relative top-12 mx-auto p-6 w-full max-w-lg shadow-2xl rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-xl font-bold text-gray-800 dark:text-white">Create Backup</h3>
+                <button id="close-secure-backup" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="space-y-4">
+                <p class="text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-xl p-3">
+                    Passwords and secrets are encrypted inside the backup.
+                </p>
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Admin token
+                    <input type="password" id="secure-backup-admin-token"
+                        class="mt-2 w-full px-4 py-3 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                        autocomplete="off">
+                </label>
+                <label class="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <input type="checkbox" id="secure-backup-confirm" class="mt-1 w-4 h-4 rounded border-gray-300 dark:border-gray-600">
+                    <span>I confirm that I want to create a backup.</span>
+                </label>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button id="confirm-secure-backup" class="flex-1 bg-cyan-700 hover:bg-cyan-800 text-white py-2 px-4 rounded-xl">
+                    Create Backup
+                </button>
+                <button id="cancel-secure-backup" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-xl">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Secure Restore Modal -->
+    <div id="secure-restore-modal" class="hidden fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm overflow-y-auto h-full w-full z-50">
+        <div class="relative top-8 mx-auto p-6 w-full max-w-2xl shadow-2xl rounded-2xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-xl font-bold text-gray-800 dark:text-white">Restore Backup</h3>
+                <button id="close-secure-restore" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="space-y-4">
+                <p class="text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-xl p-3">
+                    Restore can overwrite existing application data. Decrypted secrets are never shown here.
+                </p>
+                <input type="file" id="secure-restore-file" accept=".zip,application/zip"
+                    class="w-full px-4 py-3 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl text-sm">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Admin token
+                    <input type="password" id="secure-restore-admin-token"
+                        class="mt-2 w-full px-4 py-3 bg-white/50 dark:bg-gray-700/50 dark:text-white border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        autocomplete="off">
+                </label>
+                <button id="preview-secure-restore" class="w-full bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-xl">
+                    Preview Backup Metadata
+                </button>
+                <div id="secure-restore-preview" class="hidden text-sm rounded-xl px-4 py-3 bg-orange-50 dark:bg-orange-900/20 text-gray-700 dark:text-gray-300 space-y-1"></div>
+                <label class="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <input type="checkbox" id="secure-restore-confirm" class="mt-1 w-4 h-4 rounded border-gray-300 dark:border-gray-600">
+                    <span>I confirm this restore operation and understand it may overwrite existing data.</span>
+                </label>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button id="confirm-secure-restore" class="flex-1 bg-orange-600 hover:bg-orange-700 text-white py-2 px-4 rounded-xl">
+                    Restore Backup
+                </button>
+                <button id="cancel-secure-restore" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-xl">
                     Cancel
                 </button>
             </div>

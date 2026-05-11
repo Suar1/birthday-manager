@@ -2,6 +2,8 @@
 import argparse
 import os
 import csv
+import functools
+import hmac
 import io
 import re
 import sqlite3
@@ -9,8 +11,9 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from flask import Flask, jsonify, request, send_from_directory, send_file, Response
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, Request
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -51,6 +54,12 @@ from config import (
     encrypt_refresh_token,
     decrypt_refresh_token,
 )
+from secure_backup import (
+    SecureBackupError,
+    create_secure_backup,
+    preview_secure_backup,
+    restore_secure_backup,
+)
 from mail_oauth import (
     fetch_access_token,
     build_xoauth2_string,
@@ -67,11 +76,86 @@ UPLOADS_DIR = Path(__file__).parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+SECURE_BACKUP_EXTENSIONS = {".zip"}
+SECURE_BACKUP_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_CONTENT_LENGTH = 16 * 1024 * 1024
+
+
+class RouteLimitedRequest(Request):
+    @property
+    def max_content_length(self):
+        if self.path in {"/api/backup/secure/preview", "/api/backup/secure/restore"}:
+            return SECURE_BACKUP_MAX_BYTES
+        return super().max_content_length
+
+
+app.request_class = RouteLimitedRequest
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_request_entity_too_large(error):
+    if request.path in {"/api/backup/secure/preview", "/api/backup/secure/restore"}:
+        logger.warning("Audit: secure backup upload rejected reason=too_large")
+        return jsonify({"error": "Backup file is too large"}), 400
+    return jsonify({"error": "Uploaded file is too large"}), 413
 
 
 def allowed_file(filename: str) -> bool:
     """Check if file extension is allowed."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def backup_admin_token() -> str:
+    return os.environ.get("BIRTHDAY_REMINDER_ADMIN_TOKEN", "")
+
+
+def require_backup_admin(view_func):
+    """
+    Require explicit bearer-token admin auth for secure backup endpoints.
+
+    CSRF protection is not applied here because these endpoints do not use
+    ambient cookie/session credentials; callers must provide the admin bearer
+    token explicitly on each request.
+    """
+    @functools.wraps(view_func)
+    def wrapper(*args, **kwargs):
+        configured_token = backup_admin_token()
+        if not configured_token:
+            logger.warning("Audit: secure backup authorization failed reason=admin_token_not_configured")
+            return jsonify({"error": "Secure backup admin token is not configured"}), 503
+
+        auth_header = request.headers.get("Authorization", "")
+        supplied_token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+
+        if not hmac.compare_digest(supplied_token, configured_token):
+            logger.warning("Audit: secure backup authorization failed reason=invalid_admin_token")
+            return jsonify({"error": "Admin authorization required"}), 401
+
+        return view_func(*args, **kwargs)
+
+    return wrapper
+
+
+def read_secure_backup_upload(field_name: str = "file") -> bytes:
+    if field_name not in request.files:
+        raise SecureBackupError("No backup file provided")
+
+    file = request.files[field_name]
+    filename = secure_filename(file.filename or "")
+    if not filename:
+        raise SecureBackupError("No backup file selected")
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SECURE_BACKUP_EXTENSIONS:
+        raise SecureBackupError("File must be a backup .zip file")
+
+    archive = file.stream.read(SECURE_BACKUP_MAX_BYTES + 1)
+    if not archive:
+        raise SecureBackupError("Backup file is empty")
+    if len(archive) > SECURE_BACKUP_MAX_BYTES:
+        raise SecureBackupError("Backup file is too large")
+
+    return archive
 
 
 def fetch_access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
@@ -1335,6 +1419,114 @@ def api_import_csv():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/backup/secure", methods=["POST"])
+@require_backup_admin
+def api_secure_backup_create():
+    """Create a ZIP backup with encrypted secret values."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        confirmed = bool(payload.get("confirmed"))
+
+        if not confirmed:
+            return jsonify({"error": "Backup confirmation is required"}), 400
+
+        portable = get_portable_mode()
+        db_path = get_db_path(portable)
+        init_database(db_path)
+
+        backup, metadata = create_secure_backup(
+            db_path,
+            UPLOADS_DIR,
+            portable,
+        )
+
+        logger.info(
+            "Audit: secure backup created filename=%s method=%s",
+            metadata.get("filename"),
+            metadata.get("encryption_method"),
+        )
+
+        response = send_file(
+            io.BytesIO(backup),
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=metadata["filename"],
+        )
+        response.headers["X-Backup-Metadata"] = base64.urlsafe_b64encode(
+            json.dumps(metadata).encode("utf-8")
+        ).decode("ascii")
+        return response
+    except SecureBackupError as e:
+        logger.warning("Audit: secure backup creation failed reason=%s", str(e))
+        return jsonify({"error": str(e)}), 400
+    except Exception:
+        logger.exception("Audit: secure backup creation failed")
+        return jsonify({"error": "Backup failed"}), 500
+
+
+@app.route("/api/backup/secure/preview", methods=["POST"])
+@require_backup_admin
+def api_secure_backup_preview():
+    """Preview non-secret backup metadata."""
+    try:
+        archive = read_secure_backup_upload()
+
+        result = preview_secure_backup(archive)
+        logger.info(
+            "Audit: secure backup preview attempted filename=%s",
+            result.get("metadata", {}).get("filename"),
+        )
+        return jsonify(result)
+    except SecureBackupError as e:
+        logger.warning("Audit: secure backup preview failed reason=%s", str(e))
+        return jsonify({"error": str(e)}), 400
+    except RequestEntityTooLarge:
+        logger.warning("Audit: secure backup preview failed reason=too_large")
+        return jsonify({"error": "Backup file is too large"}), 400
+    except Exception:
+        logger.exception("Audit: secure backup preview failed")
+        return jsonify({"error": "Backup preview failed"}), 500
+
+
+@app.route("/api/backup/secure/restore", methods=["POST"])
+@require_backup_admin
+def api_secure_backup_restore():
+    """Restore a ZIP backup using the configured backup secret key."""
+    try:
+        confirmed = request.form.get("confirmed", "false").lower() == "true"
+        if not confirmed:
+            return jsonify({"error": "Restore confirmation is required"}), 400
+
+        archive = read_secure_backup_upload()
+
+        portable = get_portable_mode()
+        db_path = get_db_path(portable)
+        init_database(db_path)
+
+        result = restore_secure_backup(
+            archive,
+            db_path,
+            UPLOADS_DIR,
+            portable,
+        )
+
+        logger.info(
+            "Audit: secure backup restored mode=%s filename=%s",
+            result.get("mode"),
+            result.get("metadata", {}).get("filename"),
+        )
+        return jsonify(result)
+    except SecureBackupError as e:
+        logger.warning("Audit: secure backup restore failed reason=%s", str(e))
+        return jsonify({"error": str(e)}), 400
+    except RequestEntityTooLarge:
+        logger.warning("Audit: secure backup restore failed reason=too_large")
+        return jsonify({"error": "Backup file is too large"}), 400
+    except Exception:
+        logger.exception("Audit: secure backup restore failed")
+        return jsonify({"error": "Backup failed"}), 500
+
+
 @app.route("/api/digest/preview", methods=["GET"])
 def api_digest_preview():
     """Preview daily digest for upcoming birthdays."""
@@ -1669,4 +1861,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -195,6 +195,15 @@ function setupEventListeners() {
     document.getElementById('close-csv-preview')?.addEventListener('click', () => {
         document.getElementById('csv-preview-modal').classList.add('hidden');
     });
+    document.getElementById('secure-backup-btn')?.addEventListener('click', openSecureBackupModal);
+    document.getElementById('close-secure-backup')?.addEventListener('click', closeSecureBackupModal);
+    document.getElementById('cancel-secure-backup')?.addEventListener('click', closeSecureBackupModal);
+    document.getElementById('confirm-secure-backup')?.addEventListener('click', handleSecureBackup);
+    document.getElementById('secure-restore-btn')?.addEventListener('click', openSecureRestoreModal);
+    document.getElementById('close-secure-restore')?.addEventListener('click', closeSecureRestoreModal);
+    document.getElementById('cancel-secure-restore')?.addEventListener('click', closeSecureRestoreModal);
+    document.getElementById('preview-secure-restore')?.addEventListener('click', handleSecureRestorePreview);
+    document.getElementById('confirm-secure-restore')?.addEventListener('click', handleSecureRestore);
     
     // Daily Digest
     document.getElementById('preview-digest-btn')?.addEventListener('click', handlePreviewDigest);
@@ -2243,6 +2252,229 @@ async function handleCSVImport() {
 }
 
 // ============================================================================
+// SECURE BACKUP AND RESTORE
+// ============================================================================
+function openSecureBackupModal() {
+    document.getElementById('secure-backup-modal')?.classList.remove('hidden');
+    setupFocusTrap('secure-backup-modal');
+}
+
+function closeSecureBackupModal() {
+    document.getElementById('secure-backup-modal')?.classList.add('hidden');
+    releaseFocusTrap();
+}
+
+function openSecureRestoreModal() {
+    document.getElementById('secure-restore-modal')?.classList.remove('hidden');
+    setupFocusTrap('secure-restore-modal');
+}
+
+function closeSecureRestoreModal() {
+    document.getElementById('secure-restore-modal')?.classList.add('hidden');
+    releaseFocusTrap();
+}
+
+function setSecureBackupStatus(message, type = 'info') {
+    const status = document.getElementById('secure-backup-status');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.remove('hidden', 'bg-red-50', 'bg-green-50', 'bg-gray-100', 'dark:bg-red-900/20', 'dark:bg-green-900/20', 'dark:bg-gray-900/50');
+    if (type === 'error') {
+        status.classList.add('bg-red-50', 'dark:bg-red-900/20');
+    } else if (type === 'success') {
+        status.classList.add('bg-green-50', 'dark:bg-green-900/20');
+    } else {
+        status.classList.add('bg-gray-100', 'dark:bg-gray-900/50');
+    }
+}
+
+function decodeBackupMetadataHeader(headerValue) {
+    if (!headerValue) return null;
+    try {
+        const padded = headerValue + '='.repeat((4 - headerValue.length % 4) % 4);
+        return JSON.parse(atob(padded.replace(/-/g, '+').replace(/_/g, '/')));
+    } catch {
+        return null;
+    }
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
+}
+
+function renderBackupMetadata(metadata, targetId = 'secure-backup-metadata') {
+    const container = document.getElementById(targetId);
+    if (!container || !metadata) return;
+    container.innerHTML = `
+        <div><strong>Filename:</strong> ${escapeHtml(metadata.filename)}</div>
+        <div><strong>Timestamp:</strong> ${escapeHtml(metadata.timestamp)}</div>
+        <div><strong>Backup version:</strong> ${escapeHtml(metadata.backup_version)}</div>
+        <div><strong>Encryption method:</strong> ${escapeHtml(metadata.encryption_method)}</div>
+    `;
+    container.classList.remove('hidden');
+}
+
+function getBackupCredentials(prefix) {
+    const adminToken = document.getElementById(`${prefix}-admin-token`)?.value || '';
+    return { adminToken };
+}
+
+function backupAdminHeaders(adminToken) {
+    if (!adminToken) {
+        throw new Error('Enter the configured admin token.');
+    }
+    return {
+        'Authorization': `Bearer ${adminToken}`
+    };
+}
+
+async function handleSecureBackup() {
+    const confirmed = document.getElementById('secure-backup-confirm')?.checked;
+    const credentials = getBackupCredentials('secure-backup');
+
+    if (!confirmed) {
+        showToast('Confirm backup creation before continuing.', 'error');
+        return;
+    }
+
+    try {
+        setSecureBackupStatus('Preparing backup');
+        const authHeaders = backupAdminHeaders(credentials.adminToken);
+        const response = await fetch(`${API_BASE}/api/backup/secure`, {
+            method: 'POST',
+            headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                confirmed: true
+            })
+        });
+
+        if (!response.ok) {
+            const result = await response.json();
+            setSecureBackupStatus('Backup failed', 'error');
+            showToast(result.error || 'Backup failed', 'error');
+            return;
+        }
+
+        setSecureBackupStatus('Creating backup');
+        const metadata = decodeBackupMetadataHeader(response.headers.get('X-Backup-Metadata'));
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = metadata?.filename || 'birthday-manager-backup.zip';
+        if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+            if (filenameMatch) filename = filenameMatch[1];
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        setSecureBackupStatus('Backup ready', 'success');
+        renderBackupMetadata(metadata);
+        showToast('Backup created successfully.', 'success');
+        closeSecureBackupModal();
+    } catch (error) {
+        setSecureBackupStatus('Backup failed', 'error');
+        showToast(error.message || 'Backup failed', 'error');
+    }
+}
+
+async function handleSecureRestorePreview() {
+    const file = document.getElementById('secure-restore-file')?.files?.[0];
+    const credentials = getBackupCredentials('secure-restore');
+    if (!file) {
+        showToast('Select a backup ZIP file first.', 'error');
+        return;
+    }
+
+    try {
+        setSecureBackupStatus('Preparing backup');
+        const formData = new FormData();
+        formData.append('file', file);
+        const authHeaders = backupAdminHeaders(credentials.adminToken);
+
+        const response = await fetch(`${API_BASE}/api/backup/secure/preview`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: formData
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            setSecureBackupStatus('Backup failed', 'error');
+            showToast(result.error || 'Backup preview failed', 'error');
+            return;
+        }
+
+        renderBackupMetadata(result.metadata, 'secure-restore-preview');
+        window.pendingSecureRestorePreview = true;
+        setSecureBackupStatus('Backup ready', 'success');
+        showToast('Backup metadata verified.', 'success');
+    } catch (error) {
+        setSecureBackupStatus('Backup failed', 'error');
+        showToast(error.message || 'Backup preview failed', 'error');
+    }
+}
+
+async function handleSecureRestore() {
+    const file = document.getElementById('secure-restore-file')?.files?.[0];
+    const credentials = getBackupCredentials('secure-restore');
+    const confirmed = document.getElementById('secure-restore-confirm')?.checked;
+
+    if (!file) {
+        showToast('Select a backup ZIP file first.', 'error');
+        return;
+    }
+    if (!window.pendingSecureRestorePreview) {
+        showToast('Preview and verify backup metadata before restoring.', 'error');
+        return;
+    }
+    if (!confirmed) {
+        showToast('Confirm the restore operation before continuing.', 'error');
+        return;
+    }
+
+    try {
+        setSecureBackupStatus('Preparing backup');
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('confirmed', 'true');
+        const authHeaders = backupAdminHeaders(credentials.adminToken);
+
+        const response = await fetch(`${API_BASE}/api/backup/secure/restore`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: formData
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            setSecureBackupStatus('Backup failed', 'error');
+            showToast(result.error || 'Backup failed', 'error');
+            return;
+        }
+
+        setSecureBackupStatus('Backup ready', 'success');
+        renderBackupMetadata(result.metadata);
+        showToast('Backup restored successfully.', 'success');
+        closeSecureRestoreModal();
+        fetchBirthdays();
+    } catch (error) {
+        setSecureBackupStatus('Backup failed', 'error');
+        showToast(error.message || 'Backup failed', 'error');
+    }
+}
+
+// ============================================================================
 // 30-DAY UPCOMING VIEW
 // ============================================================================
 async function render30DayView() {
@@ -2427,4 +2659,3 @@ async function handleSaveReminders() {
         showToast('Failed to save reminder schedule', 'error');
     }
 }
-
