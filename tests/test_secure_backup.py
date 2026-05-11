@@ -63,6 +63,11 @@ class SecureBackupTestCase(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(archive), "r") as zipf:
             return json.loads(zipf.read("settings/application_config.json").decode("utf-8"))
 
+    def set_photo(self, db_path, photo):
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute("UPDATE birthdays SET photo = ? WHERE name = ?", (photo, "Ada Lovelace"))
+            conn.commit()
+
     def test_backup_succeeds_when_secret_key_exists(self):
         archive, metadata = self.create_backup()
         self.assertTrue(zipfile.is_zipfile(io.BytesIO(archive)))
@@ -129,6 +134,68 @@ class SecureBackupTestCase(unittest.TestCase):
         self.assertEqual(get_smtp_settings(False)["smtpPassword"], "smtp-password-secret")
         self.assertEqual(get_all_birthdays(restored_db)[0]["name"], "Ada Lovelace")
         self.assertEqual((restored_uploads / "avatar.txt").read_text(encoding="utf-8"), "file-data")
+
+    def test_restore_into_missing_data_and_uploads_directories(self):
+        self.set_photo(self.db_path, "/uploads/avatar.txt")
+        archive, _ = self.create_backup()
+        restored_db = self.test_dir / "missing" / "data" / "birthdays.db"
+        restored_uploads = self.test_dir / "missing" / "uploads"
+
+        restore_secure_backup(archive, restored_db, restored_uploads, False)
+
+        self.assertEqual(get_all_birthdays(restored_db)[0]["photo"], "/uploads/avatar.txt")
+        self.assertEqual((restored_uploads / "avatar.txt").read_text(encoding="utf-8"), "file-data")
+
+    def test_restore_with_missing_referenced_upload_fails_before_modifying_live_state(self):
+        live_db = self.test_dir / "live.db"
+        live_uploads = self.test_dir / "live_uploads"
+        live_uploads.mkdir()
+        init_database(live_db)
+        add_birthday(live_db, "Live User", "2000-01-01", "female", "/uploads/live.txt")
+        (live_uploads / "live.txt").write_text("live-file", encoding="utf-8")
+
+        self.set_photo(self.db_path, "/uploads/missing.txt")
+        archive, _ = create_secure_backup(self.db_path, self.test_dir / "empty_uploads", False)
+
+        with self.assertRaisesRegex(SecureBackupError, "missing uploaded files"):
+            restore_secure_backup(archive, live_db, live_uploads, False)
+
+        self.assertEqual(get_all_birthdays(live_db)[0]["name"], "Live User")
+        self.assertEqual((live_uploads / "live.txt").read_text(encoding="utf-8"), "live-file")
+        self.assertFalse((live_uploads / "missing.txt").exists())
+
+    def test_restore_with_valid_uploads_restores_files_successfully(self):
+        self.set_photo(self.db_path, "/uploads/avatar.txt")
+        archive, _ = self.create_backup()
+        restored_db = self.test_dir / "valid_uploads.db"
+        restored_uploads = self.test_dir / "valid_uploads"
+
+        restore_secure_backup(archive, restored_db, restored_uploads, False)
+
+        birthdays = get_all_birthdays(restored_db)
+        self.assertEqual(birthdays[0]["photo"], "/uploads/avatar.txt")
+        self.assertEqual((restored_uploads / "avatar.txt").read_text(encoding="utf-8"), "file-data")
+
+    def test_restore_failure_leaves_previous_state_intact(self):
+        self.set_photo(self.db_path, "/uploads/avatar.txt")
+        archive, _ = self.create_backup()
+
+        live_db = self.test_dir / "rollback.db"
+        live_uploads = self.test_dir / "rollback_uploads"
+        live_uploads.mkdir()
+        init_database(live_db)
+        add_birthday(live_db, "Existing User", "2001-02-03", "male", "/uploads/existing.txt")
+        (live_uploads / "existing.txt").write_text("existing-file", encoding="utf-8")
+
+        with patch("secure_backup.commit_restored_settings", side_effect=RuntimeError("forced failure")):
+            with self.assertRaisesRegex(RuntimeError, "forced failure"):
+                restore_secure_backup(archive, live_db, live_uploads, False)
+
+        birthdays = get_all_birthdays(live_db)
+        self.assertEqual(birthdays[0]["name"], "Existing User")
+        self.assertEqual(birthdays[0]["photo"], "/uploads/existing.txt")
+        self.assertEqual((live_uploads / "existing.txt").read_text(encoding="utf-8"), "existing-file")
+        self.assertFalse((live_uploads / "avatar.txt").exists())
 
     def test_restore_fails_with_wrong_secret_key(self):
         save_smtp_settings(

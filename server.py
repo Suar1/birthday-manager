@@ -1522,8 +1522,11 @@ def api_secure_backup_restore():
     except RequestEntityTooLarge:
         logger.warning("Audit: secure backup restore failed reason=too_large")
         return jsonify({"error": "Backup file is too large"}), 400
-    except Exception:
-        logger.exception("Audit: secure backup restore failed")
+    except Exception as exc:
+        logger.exception(
+            "Audit: secure backup restore failed error_type=%s",
+            exc.__class__.__name__,
+        )
         return jsonify({"error": "Backup failed"}), 500
 
 
